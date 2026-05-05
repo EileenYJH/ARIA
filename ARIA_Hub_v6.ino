@@ -28,17 +28,17 @@
 #include <esp_arduino_version.h>
 #endif
 
-#define WIFI_CHANNEL      1
+#define WIFI_CHANNEL      11
 #define AP_SSID           "ARIA-HUB"
 #define AP_PASSWORD       "aria1234"
 #define DNS_PORT          53
 // STA_SSID left empty — hub stays AP-only on channel 1 matching nodes
 // To enable Telegram: fill in STA_SSID, STA_PASSWORD, and ensure
 // your router is set to channel 1 to avoid ESP-NOW channel conflict
-#define STA_SSID          ""
-#define STA_PASSWORD      ""
-#define TELEGRAM_BOT_TOKEN ""
-#define TELEGRAM_CHAT_ID   ""
+#define STA_SSID          "Eileen"
+#define STA_PASSWORD      "eileenyeoh"
+#define TELEGRAM_BOT_TOKEN "8594989645:AAGVPETGPWmitPrbUhuToOWrzLNpp5Byswo"
+#define TELEGRAM_CHAT_ID   "1487637387"
 
 #define PIN_LED_STRIP     5
 #define PIN_BUZZER        16
@@ -56,6 +56,7 @@
 #define WS_PUSH_MS        1000
 #define STATUS_MS         3000
 #define ALERT_NOTIFY_COOLDOWN_MS 60000
+
 
 #define CONGEST_CONT_MS   2000
 #define CONGEST_CLEAR_MS  3000
@@ -159,6 +160,7 @@ AsyncWebServer server(80);
 AsyncWebSocket ws("/ws");
 
 uint8_t chaseStep = 0;
+uint8_t pendingNodeMap = 0;
 IrTarget irTarget = IR_TARGET_UNSET;
 unsigned long lastAnimTime = 0;
 unsigned long lastWsPush = 0;
