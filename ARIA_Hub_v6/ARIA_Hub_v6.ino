@@ -1,4 +1,4 @@
-﻿/*
+/*
   ARIA Hub Firmware v6
   Hardware: ESP32 DevKit C v4
 
