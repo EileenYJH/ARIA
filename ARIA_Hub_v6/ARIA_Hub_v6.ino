@@ -592,8 +592,6 @@ void updateAlertNotifications(unsigned long now) {
   int overall = max3(scoreA, scoreB, scoreC);
 
   int tier = 0;
-  // Tier 1 pre-warning also sends (once)
-  int tier = 0;
   if (overall >= SCORE_CRITICAL) tier = 3;
   else if (overall >= SCORE_FIRE) tier = 2;
   else if (overall >= SCORE_AMBER) tier = 1;
@@ -1132,10 +1130,6 @@ bool nodeActive(uint8_t id) {
   // A node is active if it is live OR if it has been manually forced
   return nodeOnline(id) || nodes[id].forced;
 }
-
-// Option B: hub-side node ID mapping for demo
-// When a packet arrives with nodeID=0 (unassigned), hub maps it to pendingNodeMap
-uint8_t pendingNodeMap = 0;  // 0 = no pending assignment
 
 int nodeEffectiveScore(uint8_t id) {
   if (!nodeActive(id)) return 0;
