@@ -199,6 +199,1161 @@ void printStatus();
 void clearAllState();
 void pushDashboard();
 String dashboardJson();
+String htmlPage();
+void addLog(const String &line);
+const char *zoneName(uint8_t zone);
+const char *statusForScore(int score);
+bool nodeOnline(uint8_t id);
+bool nodeActive(uint8_t id);
+int nodeEffectiveScore(uint8_t id);
+bool anyFire();
+bool anyGas();
+bool anySos();
+const char *irTargetName();
+const char *zoneOfNode(uint8_t id);
+String sosLocations();
+String gasLocations();
+int max3(int a, int b, int c);
+
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
+void onDataRecv(const esp_now_recv_info_t *info, const uint8_t *incomingData, int len) {
+#else
+void onDataRecv(const uint8_t *mac, const uint8_t *incomingData, int len) {
+#endif
+  if (len != sizeof(NodePacket)) {
+    addLog("[ESP-NOW] Ignored packet with unexpected size");
+    return;
+  }
+
+  NodePacket packet;
+  memcpy(&packet, incomingData, sizeof(packet));
+
+  // Option B: if hub has a pending node assignment and packet has no ID,
+  // remap it to the pending ID
+  if (packet.nodeID == 0 && pendingNodeMap >= 1 && pendingNodeMap <= 6) {
+    packet.nodeID = pendingNodeMap;
+    addLog(String("[MAP] Unassigned node remapped to Node ") + String(pendingNodeMap));
+  } else if (packet.nodeID == 0) {
+    packet.nodeID = 1;
+    addLog("[MAP] Unassigned node defaulted to Node 1");
+  }
+
+  if (packet.nodeID < 1 || packet.nodeID > 6) return;
+
+  NodeState &n = nodes[packet.nodeID];
+  n.coPpm = packet.coPpm;
+  n.mq2Smooth = packet.mq2Smooth;
+  n.mq7Raw = packet.mq7Raw;
+  n.tempC = packet.tempC;
+  n.humidity = packet.humidity;
+  n.lastSeen = millis();
+
+  n.fireScore = constrain(packet.fireScore, 0, 10);
+  n.flameConfirmed = packet.flameConfirmed;
+  n.gasLeakMode = packet.gasLeakMode;
+  n.sosActive = packet.sosActive;
+
+  static unsigned long lastPacketLog[7] = {0};
+  if (millis() - lastPacketLog[packet.nodeID] > 5000 || n.fireScore >= SCORE_AMBER || n.gasLeakMode || n.sosActive) {
+    lastPacketLog[packet.nodeID] = millis();
+    addLog(String("[NODE] Node ") + String(packet.nodeID) + " score " + String(n.fireScore) +
+           (n.gasLeakMode ? " GAS" : "") + (n.sosActive ? " SOS" : ""));
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+
+  pinMode(PIN_BUZZER, OUTPUT);
+  pinMode(PIN_IR_MOTION, INPUT);
+
+  digitalWrite(PIN_BUZZER, LOW);
+
+  FastLED.addLeds<WS2812B, PIN_LED_STRIP, GRB>(leds, NUM_LEDS);
+  FastLED.clear(true);
+
+  clearAllState();
+  setupEspNow();
+  setupDashboard();
+
+  if (String(STA_SSID).length() > 0) {
+    WiFi.begin(STA_SSID, STA_PASSWORD);
+    addLog(String("[NET] Connecting STA to ") + STA_SSID);
+  } else {
+    addLog("[NET] STA not configured, Telegram disabled");
+  }
+
+  Serial.println();
+  Serial.println("ARIA Hub v6 ready");
+  Serial.println("AP SSID: ARIA-HUB");
+  Serial.println("AP password: aria1234");
+  Serial.print("Dashboard: http://");
+  Serial.println(WiFi.softAPIP());
+  Serial.println("Type HELP for serial commands.");
+  Serial.println();
+  Serial.println("IR setup required:");
+  Serial.println("  Type SETIR A    to use D34 for Exit A");
+  Serial.println("  Type SETIR B    to use D34 for Exit B");
+  Serial.println("  Type SETIR C    to use D34 for Exit C");
+  Serial.println("  Type SETIR ALL  to apply D34 congestion to all exits");
+  addLog(String("[HUB] Ready at http://") + WiFi.softAPIP().toString());
+  addLog("[IR] Waiting for SETIR A/B/C/ALL");
+}
+
+void loop() {
+  unsigned long now = millis();
+
+  ws.cleanupClients();
+  dnsServer.processNextRequest();
+  handleSerialCommands();
+  updateExitCongestion(now);
+  updateOutputs();
+  updateHubBuzzer(now);
+  updateAlertNotifications(now);
+  renderLedRouting(now);
+
+  if (now - lastWsPush >= WS_PUSH_MS) {
+    lastWsPush = now;
+    pushDashboard();
+  }
+
+  if (now - lastStatusPrint >= STATUS_MS) {
+    lastStatusPrint = now;
+    if (anyFire() || anyGas() || anySos()) printStatus();
+  }
+}
+
+void setupEspNow() {
+  WiFi.mode(WIFI_AP_STA);
+  WiFi.softAP(AP_SSID, AP_PASSWORD, WIFI_CHANNEL);
+  esp_wifi_set_channel(WIFI_CHANNEL, WIFI_SECOND_CHAN_NONE);
+
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("[ESP-NOW] Init failed");
+    addLog("[ESP-NOW] Init failed");
+    return;
+  }
+
+  uint8_t broadcastAddr[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+  esp_now_peer_info_t peerInfo = {};
+  memcpy(peerInfo.peer_addr, broadcastAddr, 6);
+  peerInfo.channel = WIFI_CHANNEL;
+  peerInfo.encrypt = false;
+  if (!esp_now_is_peer_exist(broadcastAddr)) {
+    esp_now_add_peer(&peerInfo);
+  }
+
+  esp_now_register_recv_cb(onDataRecv);
+  Serial.print("[ESP-NOW] Ready. Hub STA MAC: ");
+  Serial.println(WiFi.macAddress());
+}
+
+void sendNodeCommand(uint8_t targetNodeID, const String &command) {
+  HubCommandPacket packet = {};
+  packet.magic = 0xA6;
+  packet.targetNodeID = targetNodeID;
+  String c = command;
+  c.trim();
+  c.toUpperCase();
+  c.toCharArray(packet.command, sizeof(packet.command));
+
+  uint8_t broadcastAddr[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+  esp_err_t result = esp_now_send(broadcastAddr, (uint8_t *)&packet, sizeof(packet));
+  if (result == ESP_OK) {
+    addLog(String("[HUB->NODE] target ") + String(targetNodeID) + " cmd: " + c);
+  } else {
+    addLog(String("[HUB->NODE] send failed code ") + String((int)result) + " (" + espNowErrName((int)result) + ")");
+    uint8_t ch = 0;
+    wifi_second_chan_t second;
+    if (esp_wifi_get_channel(&ch, &second) == ESP_OK) {
+      addLog(String("[HUB->NODE] current Wi-Fi channel: ") + String(ch) + ", configured ESPNOW channel: " + String(WIFI_CHANNEL));
+      addLog("[HUB->NODE] If using STA for Telegram, router channel must match node channel.");
+    }
+  }
+}
+
+const char *espNowErrName(int code) {
+  switch (code) {
+    case ESP_ERR_ESPNOW_NOT_INIT: return "NOT_INIT";
+    case ESP_ERR_ESPNOW_ARG: return "ARG";
+    case ESP_ERR_ESPNOW_NO_MEM: return "NO_MEM";
+    case ESP_ERR_ESPNOW_FULL: return "FULL";
+    case ESP_ERR_ESPNOW_NOT_FOUND: return "NOT_FOUND";
+    case ESP_ERR_ESPNOW_INTERNAL: return "INTERNAL";
+    case ESP_ERR_ESPNOW_EXIST: return "EXIST";
+    case ESP_ERR_ESPNOW_IF: return "IF";
+    case ESP_ERR_ESPNOW_CHAN: return "CHAN";
+    default: return "UNKNOWN";
+  }
+}
+
+void setupDashboard() {
+  dnsServer.start(DNS_PORT, "*", WiFi.softAPIP());
+
+  ws.onEvent([](AsyncWebSocket *server, AsyncWebSocketClient *client,
+                AwsEventType type, void *arg, uint8_t *data, size_t len) {
+    if (type == WS_EVT_CONNECT) {
+      client->text(dashboardJson());
+    } else if (type == WS_EVT_DATA) {
+      AwsFrameInfo *info = (AwsFrameInfo *)arg;
+      if (info->final && info->index == 0 && info->len == len && info->opcode == WS_TEXT) {
+        String cmd = "";
+        for (size_t i = 0; i < len; i++) cmd += (char)data[i];
+        cmd.trim();
+        if (cmd.length()) runCommand(cmd, true);
+      }
+    }
+  });
+
+  server.addHandler(&ws);
+  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
+    request->send(200, "text/html; charset=utf-8", htmlPage());
+  });
+  server.on("/generate_204", HTTP_GET, [](AsyncWebServerRequest *request) {
+    request->redirect("/");
+  });
+  server.on("/gen_204", HTTP_GET, [](AsyncWebServerRequest *request) {
+    request->redirect("/");
+  });
+  server.on("/hotspot-detect.html", HTTP_GET, [](AsyncWebServerRequest *request) {
+    request->send(200, "text/html; charset=utf-8", htmlPage());
+  });
+  server.on("/connecttest.txt", HTTP_GET, [](AsyncWebServerRequest *request) {
+    request->redirect("/");
+  });
+  server.on("/ncsi.txt", HTTP_GET, [](AsyncWebServerRequest *request) {
+    request->redirect("/");
+  });
+  server.on("/state", HTTP_GET, [](AsyncWebServerRequest *request) {
+    request->send(200, "application/json", dashboardJson());
+  });
+  server.onNotFound([](AsyncWebServerRequest *request) {
+    request->redirect("/");
+  });
+  server.begin();
+}
+
+void updateExitCongestion(unsigned long now) {
+  if (irTarget == IR_TARGET_UNSET) {
+    for (uint8_t i = 0; i < 3; i++) {
+      exits[i].motion = false;
+      if (!exits[i].forced) exits[i].congested = false;
+    }
+    return;
+  }
+
+  bool motionNow = digitalRead(PIN_IR_MOTION) == HIGH;
+
+  for (uint8_t i = 0; i < 3; i++) {
+    bool sensorApplies = (irTarget == IR_TARGET_ALL || irTarget == (IrTarget)i);
+
+    if (sensorApplies) {
+      updateExitFromMotion(i, motionNow, now);
+    } else {
+      exits[i].motion = false;
+      if (!exits[i].forced && exits[i].congested) {
+        exits[i].congested = false;
+        char exitName = 'A' + i;
+        addLog(String("[IR] Exit ") + exitName + " clear (not assigned to D34)");
+      }
+    }
+  }
+}
+
+void updateExitFromMotion(uint8_t index, bool motionNow, unsigned long now) {
+    ExitState &e = exits[index];
+    e.motion = motionNow;
+
+    if (e.windowStart == 0) e.windowStart = now;
+    if (e.rateStart == 0) e.rateStart = now;
+    if (e.lastMotionSample == 0) e.lastMotionSample = now;
+
+    unsigned long elapsed = now - e.lastMotionSample;
+    e.lastMotionSample = now;
+    if (motionNow) e.motionMsInWindow += elapsed;
+
+    if (motionNow && !e.lastMotion) {
+      e.eventsInRateWindow++;
+      e.motionStart = now;
+      e.clearStart = 0;
+    }
+    if (!motionNow && e.lastMotion) {
+      e.clearStart = now;
+      e.motionStart = 0;
+    }
+    e.lastMotion = motionNow;
+
+    if (now - e.windowStart >= WINDOW_MS) {
+      e.motionMsInWindow = 0;
+      e.windowStart = now;
+    }
+    if (now - e.rateStart >= RATE_WINDOW_MS) {
+      e.eventsInRateWindow = 0;
+      e.rateStart = now;
+    }
+
+    bool continuous = motionNow && e.motionStart > 0 && now - e.motionStart >= CONGEST_CONT_MS;
+    bool windowBusy = e.motionMsInWindow > (WINDOW_MS * 3UL / 10UL);
+    bool rateBusy = e.eventsInRateWindow > 5;
+    bool countBusy = e.eventsInRateWindow >= CONGEST_EVENT_THRESHOLD;
+    bool measuredCongested = continuous || windowBusy || rateBusy || countBusy;
+
+    if (measuredCongested) {
+      e.congestedHoldUntil = now + CONGEST_BLOCK_HOLD_MS;
+    }
+
+    bool holdActive = now < e.congestedHoldUntil;
+    bool canClear = !motionNow &&
+                    e.clearStart > 0 &&
+                    now - e.clearStart >= CONGEST_CLEAR_MS &&
+                    !rateBusy &&
+                    !windowBusy &&
+                    !countBusy &&
+                    !holdActive;
+
+    bool nextCongested = e.forced || measuredCongested || (e.congested && !canClear);
+    if (nextCongested != e.congested) {
+      e.congested = nextCongested;
+      char exitName = 'A' + index;
+      addLog(String("[IR] Exit ") + exitName + (e.congested ? " congested" : " clear"));
+    }
+}
+
+void updateOutputs() {
+  bool fire = anyFire();
+  // Fan relay and ventilation handled at node level only
+  // Hub focuses on exit routing and LED guidance
+}
+
+// ── HUB BUZZER TIMING ───────────────────────────────────────────
+// Active buzzer: digitalWrite HIGH=ON LOW=OFF, no tone() needed
+// Emergency: 500ms on / 500ms off (classic alarm)
+// Critical:  100ms on / 100ms off (urgent rapid beep)
+// Gas:       200ms on / 300ms off
+// SOS:       150ms on / 150ms off
+
+void updateHubBuzzer(unsigned long now) {
+  int scoreA, scoreB, scoreC;
+  computeZoneScores(scoreA, scoreB, scoreC);
+  int overall = max3(scoreA, scoreB, scoreC);
+
+  if (overall >= SCORE_CRITICAL) {
+    // Critical — rapid 100ms beep, very urgent
+    unsigned long phase = buzzerOn ? 100UL : 100UL;
+    if (now - buzzerStepStart >= phase) {
+      buzzerStepStart = now;
+      buzzerOn = !buzzerOn;
+    }
+    digitalWrite(PIN_BUZZER, buzzerOn ? HIGH : LOW);
+    return;
+  }
+
+  if (overall >= SCORE_FIRE) {
+    // Emergency — classic alarm 500ms on/off
+    unsigned long phase = buzzerOn ? 500UL : 500UL;
+    if (now - buzzerStepStart >= phase) {
+      buzzerStepStart = now;
+      buzzerOn = !buzzerOn;
+    }
+    digitalWrite(PIN_BUZZER, buzzerOn ? HIGH : LOW);
+    return;
+  }
+
+  if (anyGas()) {
+    // Gas — 200ms on / 300ms off
+    unsigned long phase = buzzerOn ? (unsigned long)GAS_BEEP_ON_MS : (unsigned long)GAS_BEEP_OFF_MS;
+    if (now - buzzerStepStart >= phase) {
+      buzzerStepStart = now;
+      buzzerOn = !buzzerOn;
+    }
+    digitalWrite(PIN_BUZZER, buzzerOn ? HIGH : LOW);
+    return;
+  }
+
+  if (anySos()) {
+    // SOS indicator — 150ms on / 150ms off
+    unsigned long phase = buzzerOn ? (unsigned long)SOS_BEEP_ON_MS : (unsigned long)SOS_BEEP_OFF_MS;
+    if (now - buzzerStepStart >= phase) {
+      buzzerStepStart = now;
+      buzzerOn = !buzzerOn;
+    }
+    digitalWrite(PIN_BUZZER, buzzerOn ? HIGH : LOW);
+    return;
+  }
+
+  // Idle
+  buzzerOn = false;
+  digitalWrite(PIN_BUZZER, LOW);
+}
+
+void updateAlertNotifications(unsigned long now) {
+  int scoreA, scoreB, scoreC;
+  computeZoneScores(scoreA, scoreB, scoreC);
+  int overall = max3(scoreA, scoreB, scoreC);
+
+  int tier = 0;
+  // Tier 1 pre-warning also sends (once)
+  int tier = 0;
+  if (overall >= SCORE_CRITICAL) tier = 3;
+  else if (overall >= SCORE_FIRE) tier = 2;
+  else if (overall >= SCORE_AMBER) tier = 1;
+
+  if (tier == 0) {
+    lastAlertTierSent = 0;
+    return;
+  }
+
+  if (tier == lastAlertTierSent && now - lastAlertNotifyTime < ALERT_NOTIFY_COOLDOWN_MS) {
+    return;
+  }
+
+  // Build message with real newlines
+  String msg = "ARIA FIRE ALERT\n";
+  if (tier == 3) msg += "CRITICAL (Tier 3) — Warden contact BOMBA 999\n";
+  else if (tier == 2) msg += "EMERGENCY (Tier 2) — Evacuate now\n";
+  else msg += "PRE-WARNING (Tier 1) — Investigate\n";
+  msg += "\nZone A: " + String(scoreA) + "/10\n";
+  msg += "Zone B: " + String(scoreB) + "/10\n";
+  msg += "Zone C: " + String(scoreC) + "/10\n";
+  msg += "\nExit A: " + String(exits[0].congested ? "CONGESTED" : "clear") + "\n";
+  msg += "Exit B: " + String(exits[1].congested ? "CONGESTED" : "clear") + "\n";
+  msg += "Exit C: " + String(exits[2].congested ? "CONGESTED" : "clear");
+  if (anySos())  msg += "\n\nSOS: " + sosLocations();
+  if (anyGas())  msg += "\nGas: " + gasLocations();
+
+  sendTelegramAlert(msg);
+  lastAlertTierSent = tier;
+  lastAlertNotifyTime = now;
+}
+
+void sendTelegramAlert(const String &text) {
+  if (String(TELEGRAM_BOT_TOKEN).length() == 0 || String(TELEGRAM_CHAT_ID).length() == 0) {
+    addLog("[TELEGRAM] Not configured — fill STA_SSID + token in firmware");
+    return;
+  }
+  if (WiFi.status() != WL_CONNECTED) {
+    addLog("[TELEGRAM] No STA internet connection");
+    return;
+  }
+
+  WiFiClientSecure client;
+  client.setInsecure();
+  HTTPClient http;
+
+  String url = "https://api.telegram.org/bot";
+  url += TELEGRAM_BOT_TOKEN;
+  url += "/sendMessage";
+
+  if (!http.begin(client, url)) {
+    addLog("[TELEGRAM] HTTP begin failed");
+    return;
+  }
+
+  // JSON body — handles newlines and special chars cleanly
+  http.addHeader("Content-Type", "application/json");
+
+  String escaped = text;
+  escaped.replace("\\", "\\\\");
+  escaped.replace("\"", "\\\"");
+  escaped.replace("\n", "\\n");
+
+  String body = "{\"chat_id\":\"";
+  body += TELEGRAM_CHAT_ID;
+  body += "\",\"text\":\"";
+  body += escaped;
+  body += "\"}";
+
+  int code = http.POST(body);
+  if (code == 200) addLog("[TELEGRAM] Alert sent OK");
+  else if (code > 0) addLog(String("[TELEGRAM] Code ") + code + " — check token/chat_id");
+  else addLog(String("[TELEGRAM] Failed: ") + http.errorToString(code));
+  http.end();
+}
+
+void computeZoneScores(int &scoreA, int &scoreB, int &scoreC) {
+  scoreA = max(nodeEffectiveScore(1), nodeEffectiveScore(5));
+  scoreB = max(nodeEffectiveScore(2), nodeEffectiveScore(3));
+  scoreC = max(nodeEffectiveScore(4), nodeEffectiveScore(6));
+}
+
+void computeZoneRender(ZoneRender render[3]) {
+  int scoreA, scoreB, scoreC;
+  computeZoneScores(scoreA, scoreB, scoreC);
+
+  bool fireA = scoreA >= SCORE_FIRE;
+  bool fireB = scoreB >= SCORE_FIRE;
+  bool fireC = scoreC >= SCORE_FIRE;
+  bool warningOnly = !fireA && !fireB && !fireC && max3(scoreA, scoreB, scoreC) >= SCORE_AMBER;
+  bool gasOnly = anyGas() && !fireA && !fireB && !fireC;
+
+  for (uint8_t i = 0; i < 3; i++) {
+    render[i] = {COLOR_OFF, DIR_OFF};
+  }
+
+  if (gasOnly) {
+    render[0] = {COLOR_YELLOW, DIR_LEFT};
+    render[1] = {COLOR_YELLOW, DIR_SPLIT};
+    render[2] = {COLOR_YELLOW, DIR_RIGHT};
+    return;
+  }
+
+  if (warningOnly) {
+    for (uint8_t i = 0; i < 3; i++) render[i] = {COLOR_ORANGE, DIR_PULSE};
+    return;
+  }
+
+  if (!fireA && !fireB && !fireC) return;
+
+  if (fireA && fireB && fireC) {
+    render[0] = {COLOR_RED, DIR_LEFT};
+    render[1] = {COLOR_RED, DIR_SPLIT};
+    render[2] = {COLOR_RED, DIR_RIGHT};
+  } else if (fireA && fireC) {
+    render[0] = {COLOR_RED, DIR_RIGHT};
+    render[1] = {COLOR_GREEN, DIR_PULSE};
+    render[2] = {COLOR_RED, DIR_LEFT};
+  } else if (fireA && fireB) {
+    render[0] = {COLOR_RED, DIR_RIGHT};
+    render[1] = {COLOR_RED, DIR_RIGHT};
+    render[2] = {COLOR_GREEN, DIR_RIGHT};
+  } else if (fireB && fireC) {
+    render[0] = {COLOR_GREEN, DIR_LEFT};
+    render[1] = {COLOR_RED, DIR_LEFT};
+    render[2] = {COLOR_RED, DIR_LEFT};
+  } else if (fireA) {
+    render[0] = {COLOR_RED, DIR_RIGHT};
+    render[1] = {COLOR_GREEN, DIR_SPLIT};
+    render[2] = {COLOR_GREEN, DIR_RIGHT};
+  } else if (fireB) {
+    render[0] = {COLOR_GREEN, DIR_LEFT};
+    render[1] = {COLOR_RED, DIR_SPLIT};
+    render[2] = {COLOR_GREEN, DIR_RIGHT};
+  } else if (fireC) {
+    render[0] = {COLOR_GREEN, DIR_LEFT};
+    render[1] = {COLOR_GREEN, DIR_SPLIT};
+    render[2] = {COLOR_RED, DIR_LEFT};
+  }
+
+  for (uint8_t z = 0; z < 3; z++) {
+    if (render[z].color == COLOR_GREEN && exitCongestedForZone(z)) {
+      render[z].color = COLOR_ORANGE;
+    }
+  }
+}
+
+void renderLedRouting(unsigned long now) {
+  if (now - lastAnimTime < ANIM_INTERVAL_MS) return;
+  lastAnimTime = now;
+  chaseStep++;
+
+  ZoneRender render[3];
+  computeZoneRender(render);
+
+  FastLED.clear();
+  for (uint8_t z = 0; z < 3; z++) drawZone(z, render[z]);
+  FastLED.show();
+}
+
+void drawZone(uint8_t zone, ZoneRender zr) {
+  if (zr.color == COLOR_OFF || zr.direction == DIR_OFF) return;
+  CRGB c = colorFor(zr.color);
+
+  if (zr.direction == DIR_PULSE) {
+    drawPulseZone(zone, c);
+    return;
+  }
+
+  if (zone == 1 && zr.direction == DIR_SPLIT) {
+    drawSplitZoneB(c);
+    return;
+  }
+
+  uint8_t start = zone * ZONE_LEN;
+  uint8_t end = start + ZONE_LEN - 1;
+  drawChaseRange(start, end, zr.direction, c);
+}
+
+void drawChaseRange(uint8_t start, uint8_t end, Direction dir, CRGB color) {
+  // Single moving packet — 1 lead pixel + trailing fade pixels based on proximity to exit
+  // No secondary packet — keeps it clean and avoids colour mixing
+  int len = (int)end - (int)start + 1;
+  if (len <= 0) return;
+
+  int progress = chaseStep % len;
+  // Lead pixel position
+  int lead = (dir == DIR_LEFT)
+    ? ((int)end - progress)
+    : ((int)start + progress);
+
+  auto inRange = [&](int p) -> bool {
+    return p >= (int)start && p <= (int)end;
+  };
+
+  // Distance from exit determines trail length (proximity packing)
+  int exitPos  = (dir == DIR_LEFT) ? (int)start : (int)end;
+  int distToExit = abs(lead - exitPos);
+
+  int trailLen;
+  if      (distToExit <= 2) trailLen = 4;  // dense near exit
+  else if (distToExit <= 5) trailLen = 3;  // medium
+  else if (distToExit <= 8) trailLen = 2;  // sparse
+  else                      trailLen = 1;  // very sparse far from exit
+
+  // Draw lead pixel at full brightness
+  if (inRange(lead)) leds[lead] = color;
+
+  // Draw trail pixels behind the lead, dimming progressively
+  for (int t = 1; t < trailLen; t++) {
+    int tp = (dir == DIR_LEFT) ? (lead + t) : (lead - t);
+    if (!inRange(tp)) continue;
+    CRGB trailColor = color;
+    // Dim each trail pixel: 60% → 35% → 15%
+    uint8_t dim = (t == 1) ? 150 : (t == 2) ? 90 : 40;
+    trailColor.nscale8_video(dim);
+    leds[tp] = trailColor;
+  }
+}
+
+void drawSplitZoneB(CRGB color) {
+  drawChaseRange(10, 14, DIR_LEFT, color);
+  drawChaseRange(15, 19, DIR_RIGHT, color);
+}
+
+void drawPulseZone(uint8_t zone, CRGB color) {
+  uint8_t start = zone * ZONE_LEN;
+  uint8_t end = start + ZONE_LEN - 1;
+  uint8_t brightness = beatsin8(30, 45, 255);
+  CRGB pulse = color;
+  pulse.nscale8_video(brightness);
+  for (uint8_t i = start; i <= end; i++) leds[i] = pulse;
+}
+
+CRGB colorFor(ZoneColor c) {
+  if (c == COLOR_GREEN) return CRGB(0, 180, 0);
+  if (c == COLOR_RED) return CRGB(220, 0, 0);
+  if (c == COLOR_ORANGE) return CRGB(255, 140, 0);
+  if (c == COLOR_YELLOW) return CRGB(255, 212, 0);
+  return CRGB::Black;
+}
+
+bool exitCongestedForZone(uint8_t zone) {
+  if (zone == 0) return exits[0].congested;
+  if (zone == 1) return exits[1].congested;
+  return exits[2].congested;
+}
+
+void handleSerialCommands() {
+  if (!Serial.available()) return;
+  String cmd = Serial.readStringUntil('\n');
+  cmd.trim();
+  if (cmd.length()) runCommand(cmd, false);
+}
+
+void runCommand(String cmd, bool fromWeb) {
+  String original = cmd;
+  cmd.trim();
+  cmd.toUpperCase();
+
+  if (cmd.startsWith("NODE ")) {
+    String rest = cmd.substring(5);
+    rest.trim();
+    int space = rest.indexOf(' ');
+
+    if (space > 0) {
+      String first = rest.substring(0, space);
+      String second = rest.substring(space + 1);
+      first.trim();
+      second.trim();
+      int id = first.toInt();
+
+      if (id >= 1 && id <= 6 && second == "CLEAR") {
+        nodes[id].forced = false;
+        nodes[id].fireScore = 0;
+        nodes[id].gasLeakMode = false;
+        nodes[id].sosActive = false;
+        nodes[id].flameConfirmed = false;
+        addLog(String("[CMD] Node ") + String(id) + " state cleared");
+      } else {
+        int score = second.toInt();
+        if (id >= 1 && id <= 6 && score >= 0 && score <= 10) {
+          nodes[id].fireScore = score;
+          nodes[id].forced = true;
+          addLog(String("[CMD] Node ") + String(id) + " score " + String(score));
+        }
+      }
+    } else {
+      int score = rest.toInt();
+      if (score >= 0 && score <= 10) {
+        nodes[1].fireScore = score;
+        nodes[1].forced = true;
+        addLog(String("[CMD] Node 1 score ") + String(score));
+      }
+    }
+  } else if (cmd.startsWith("NODECMD ")) {
+    String rest = cmd.substring(8);
+    rest.trim();
+    int space = rest.indexOf(' ');
+    if (space > 0) {
+      int id = rest.substring(0, space).toInt();
+      String nodeCmd = rest.substring(space + 1);
+      nodeCmd.trim();
+      if (id >= 0 && id <= 255 && nodeCmd.length()) {
+        sendNodeCommand((uint8_t)id, nodeCmd);
+      } else {
+        addLog("[CMD] Use NODECMD <targetID> <command>");
+      }
+    } else {
+      addLog("[CMD] Use NODECMD <targetID> <command>");
+    }
+  } else if (cmd.startsWith("SETNODE ")) {
+    String rest = cmd.substring(8);
+    rest.trim();
+    int space = rest.indexOf(' ');
+    if (space > 0) {
+      // Hub-to-node wireless command (old behaviour)
+      int target = rest.substring(0, space).toInt();
+      int newId = rest.substring(space + 1).toInt();
+      if (target >= 0 && target <= 255 && newId >= 1 && newId <= 6) {
+        sendNodeCommand((uint8_t)target, String("SETNODE ") + String(newId));
+      }
+    } else {
+      // Option B: set hub-side pending map for next unassigned packet
+      int newId = rest.toInt();
+      if (newId >= 1 && newId <= 6) {
+        pendingNodeMap = (uint8_t)newId;
+        addLog(String("[MAP] Hub will remap next unassigned node to Node ") + String(newId));
+      } else if (newId == 0) {
+        pendingNodeMap = 0;
+        addLog("[MAP] Node remapping cleared");
+      } else {
+        addLog("[CMD] Use SETNODE <1-6> to remap, or SETNODE 0 to clear");
+      }
+    }
+  } else if (cmd.startsWith("SETSCORE ")) {
+    String rest = cmd.substring(9);
+    rest.trim();
+    int space = rest.indexOf(' ');
+    if (space > 0) {
+      int id = rest.substring(0, space).toInt();
+      int score = rest.substring(space + 1).toInt();
+      if (id >= 1 && id <= 6 && score >= 0 && score <= 10) {
+        nodes[id].fireScore = score;
+        if (score >= SCORE_FIRE) nodes[id].gasLeakMode = false;
+        nodes[id].forced = true;
+        addLog(String("[CMD] Set Node ") + String(id) + " score " + String(score));
+      } else {
+        addLog("[CMD] Use SETSCORE <1-6> <0-10>");
+      }
+    } else {
+      addLog("[CMD] Use SETSCORE <1-6> <0-10>");
+    }
+  } else if (cmd.startsWith("GAS ")) {
+    String rest = cmd.substring(4);
+    rest.trim();
+    int space = rest.indexOf(' ');
+    if (space > 0) {
+      int id = rest.substring(0, space).toInt();
+      String value = rest.substring(space + 1);
+      value.trim();
+      if (id >= 1 && id <= 6 && (value == "ON" || value == "OFF")) {
+        nodes[id].gasLeakMode = (value == "ON");
+        if (nodes[id].gasLeakMode) nodes[id].fireScore = 0;
+        nodes[id].forced = true;
+        addLog(String("[CMD] Node ") + String(id) + " gas " + value);
+      }
+    }
+  } else if (cmd.startsWith("SOS ")) {
+    String rest = cmd.substring(4);
+    rest.trim();
+    int space = rest.indexOf(' ');
+    if (space > 0) {
+      int id = rest.substring(0, space).toInt();
+      String value = rest.substring(space + 1);
+      value.trim();
+      if (id >= 1 && id <= 6 && (value == "ON" || value == "OFF")) {
+        nodes[id].sosActive = (value == "ON");
+        nodes[id].forced = true;
+        addLog(String("[CMD] Node ") + String(id) + " SOS " + value);
+      }
+    }
+  } else if (cmd.startsWith("FLAME ")) {
+    String rest = cmd.substring(6);
+    rest.trim();
+    int space = rest.indexOf(' ');
+    if (space > 0) {
+      int id = rest.substring(0, space).toInt();
+      String value = rest.substring(space + 1);
+      value.trim();
+      if (id >= 1 && id <= 6 && (value == "ON" || value == "OFF")) {
+        nodes[id].flameConfirmed = (value == "ON");
+        nodes[id].forced = true;
+        addLog(String("[CMD] Node ") + String(id) + " flame " + value);
+      }
+    }
+  } else if (cmd.startsWith("SETIR ")) {
+    handleSetIr(cmd.substring(6));
+  } else if (cmd.startsWith("CONGEST ")) {
+    char e = cmd.charAt(8);
+    if (e >= 'A' && e <= 'C') {
+      exits[e - 'A'].forced = true;
+      exits[e - 'A'].congested = true;
+      addLog(String("[CMD] Exit ") + e + " forced congested");
+    }
+  } else if (cmd.startsWith("CLEAR CONGEST ")) {
+    char e = cmd.charAt(14);
+    if (e >= 'A' && e <= 'C') {
+      exits[e - 'A'].forced = false;
+      exits[e - 'A'].congested = false;
+      addLog(String("[CMD] Exit ") + e + " congestion cleared");
+    }
+  } else if (cmd == "CLEAR") {
+    clearAllState();
+    addLog("[CMD] All state cleared");
+  } else if (cmd == "STATUS") {
+    printStatus();
+  } else if (cmd == "HELP") {
+    Serial.println("Commands:");
+    Serial.println("  NODECMD <id> <cmd> send remote command to node");
+    Serial.println("  SETNODE <target> <newID> set node ID remotely (target 0 for unassigned)");
+    Serial.println("  NODE <id> <score>  e.g. NODE 1 7");
+    Serial.println("  NODE <score>       shortcut, sets Node 1");
+    Serial.println("  SETSCORE <id> <0-10> set node fire score for reaction test");
+    Serial.println("  NODE <id> CLEAR    clear forced state for one node");
+    Serial.println("  GAS <id> ON/OFF    force gas leak on one node");
+    Serial.println("  SOS <id> ON/OFF    force SOS on one node");
+    Serial.println("  FLAME <id> ON/OFF  force flame flag on one node");
+    Serial.println("  SETIR A/B/C/ALL    assign D34 IR motion sensor");
+    Serial.println("  CONGEST A/B/C      force exit congestion");
+    Serial.println("  CLEAR CONGEST A/B/C");
+    Serial.println("  CLEAR              reset all state");
+    Serial.println("  STATUS             print node and exit state");
+    Serial.println("  HELP               show commands");
+  } else if (cmd.length()) {
+    addLog(String("[CMD] Unknown: ") + original);
+  }
+
+  if (fromWeb && !cmd.startsWith("NODE ") && !cmd.startsWith("NODECMD ") &&
+      !cmd.startsWith("SETNODE ") && !cmd.startsWith("SETSCORE ") &&
+      !cmd.startsWith("GAS ") &&
+      !cmd.startsWith("SOS ") && !cmd.startsWith("FLAME ") &&
+      !cmd.startsWith("SETIR ") && !cmd.startsWith("CONGEST ") &&
+      cmd != "CLEAR" && cmd != "STATUS") {
+    addLog(String("[CHAT] ") + original);
+  }
+  pushDashboard();
+}
+
+void handleSetIr(String target) {
+  target.trim();
+  target.toUpperCase();
+
+  if (target == "A") {
+    irTarget = IR_TARGET_A;
+  } else if (target == "B") {
+    irTarget = IR_TARGET_B;
+  } else if (target == "C") {
+    irTarget = IR_TARGET_C;
+  } else if (target == "ALL") {
+    irTarget = IR_TARGET_ALL;
+  } else {
+    addLog("[IR] Invalid target. Use SETIR A, SETIR B, SETIR C, or SETIR ALL");
+    return;
+  }
+
+  for (uint8_t i = 0; i < 3; i++) {
+    exits[i].motion = false;
+    if (!exits[i].forced) exits[i].congested = false;
+    exits[i].motionStart = 0;
+    exits[i].clearStart = 0;
+    exits[i].windowStart = millis();
+    exits[i].rateStart = millis();
+    exits[i].motionMsInWindow = 0;
+    exits[i].eventsInRateWindow = 0;
+    exits[i].congestedHoldUntil = 0;
+    exits[i].lastMotion = false;
+    exits[i].lastMotionSample = millis();
+  }
+
+  addLog(String("[IR] D34 assigned to ") + irTargetName());
+}
+
+void clearAllState() {
+  for (uint8_t i = 0; i < 7; i++) {
+    nodes[i] = NodeState{0, 0, 0, 0, false, false, false, 0.0f, 0.0f, 0, false};
+  }
+  for (uint8_t i = 0; i < 3; i++) {
+    exits[i].motion = false;
+    exits[i].congested = false;
+    exits[i].forced = false;
+    exits[i].motionStart = 0;
+    exits[i].clearStart = 0;
+    exits[i].windowStart = millis();
+    exits[i].rateStart = millis();
+    exits[i].motionMsInWindow = 0;
+    exits[i].eventsInRateWindow = 0;
+    exits[i].congestedHoldUntil = 0;
+    exits[i].lastMotion = false;
+    exits[i].lastMotionSample = millis();
+  }
+  FastLED.clear(true);
+}
+
+void printStatus() {
+  int scoreA, scoreB, scoreC;
+  computeZoneScores(scoreA, scoreB, scoreC);
+
+  Serial.println("========================================");
+  Serial.printf("Zone A: %d (%s)\n", scoreA, statusForScore(scoreA));
+  Serial.printf("Zone B: %d (%s)\n", scoreB, statusForScore(scoreB));
+  Serial.printf("Zone C: %d (%s)\n", scoreC, statusForScore(scoreC));
+  for (uint8_t i = 1; i <= 6; i++) {
+    Serial.printf("Node %u: score=%d co=%d mq2=%d gas=%s sos=%s online=%s active=%s forced=%s\n",
+      i, nodes[i].fireScore, nodes[i].coPpm, nodes[i].mq2Smooth,
+      nodes[i].gasLeakMode ? "YES" : "no",
+      nodes[i].sosActive ? "YES" : "no",
+      nodeOnline(i) ? "YES" : "no",
+      nodeActive(i) ? "YES" : "no",
+      nodes[i].forced ? "YES" : "no");
+  }
+  Serial.printf("Exit A: %s%s\n", exits[0].congested ? "CONGESTED" : "clear", exits[0].forced ? " forced" : "");
+  Serial.printf("Exit B: %s%s\n", exits[1].congested ? "CONGESTED" : "clear", exits[1].forced ? " forced" : "");
+  Serial.printf("Exit C: %s%s\n", exits[2].congested ? "CONGESTED" : "clear", exits[2].forced ? " forced" : "");
+  Serial.printf("IR D34 target: %s\n", irTargetName());
+  Serial.println("========================================");
+}
+
+bool nodeOnline(uint8_t id) {
+  if (id < 1 || id > 6) return false;
+  return nodes[id].lastSeen > 0 && millis() - nodes[id].lastSeen <= NODE_TIMEOUT_MS;
+}
+
+bool nodeActive(uint8_t id) {
+  if (id < 1 || id > 6) return false;
+  // A node is active if it is live OR if it has been manually forced
+  return nodeOnline(id) || nodes[id].forced;
+}
+
+// Option B: hub-side node ID mapping for demo
+// When a packet arrives with nodeID=0 (unassigned), hub maps it to pendingNodeMap
+uint8_t pendingNodeMap = 0;  // 0 = no pending assignment
+
+int nodeEffectiveScore(uint8_t id) {
+  if (!nodeActive(id)) return 0;
+  return nodes[id].fireScore;
+}
+
+bool anyFire() {
+  for (uint8_t i = 1; i <= 6; i++) {
+    if (nodeActive(i) && nodes[i].fireScore >= SCORE_FIRE) return true;
+  }
+  return false;
+}
+
+bool anyGas() {
+  for (uint8_t i = 1; i <= 6; i++) {
+    if (nodeActive(i) && nodes[i].gasLeakMode) return true;
+  }
+  return false;
+}
+
+bool anySos() {
+  for (uint8_t i = 1; i <= 6; i++) {
+    if (nodeActive(i) && nodes[i].sosActive) return true;
+  }
+  return false;
+}
+
+
+const char *irTargetName() {
+  if (irTarget == IR_TARGET_A) return "Exit A";
+  if (irTarget == IR_TARGET_B) return "Exit B";
+  if (irTarget == IR_TARGET_C) return "Exit C";
+  if (irTarget == IR_TARGET_ALL) return "All exits";
+  return "not set";
+}
+
+const char *zoneOfNode(uint8_t id) {
+  if (id == 1 || id == 5) return "Zone A";
+  if (id == 2 || id == 3) return "Zone B";
+  if (id == 4 || id == 6) return "Zone C";
+  return "Unknown";
+}
+
+String sosLocations() {
+  String out = "";
+  for (uint8_t i = 1; i <= 6; i++) {
+    if (!nodeActive(i) || !nodes[i].sosActive) continue;
+    if (out.length()) out += ", ";
+    out += "Node ";
+    out += String(i);
+    out += " (";
+    out += zoneOfNode(i);
+    out += ")";
+  }
+  if (!out.length()) out = "none";
+  return out;
+}
+
+String gasLocations() {
+  String out = "";
+  for (uint8_t i = 1; i <= 6; i++) {
+    if (!nodeActive(i) || !nodes[i].gasLeakMode) continue;
+    if (out.length()) out += ", ";
+    out += "Node ";
+    out += String(i);
+    out += " (";
+    out += zoneOfNode(i);
+    out += ")";
+  }
+  if (!out.length()) out = "none";
+  return out;
+}
+
+int max3(int a, int b, int c) {
+  return max(a, max(b, c));
+}
+
+const char *statusForScore(int score) {
+  if (score >= SCORE_CRITICAL) return "CRITICAL";
+  if (score >= SCORE_FIRE) return "FIRE";
+  if (score >= SCORE_AMBER) return "WARNING";
+  return "SAFE";
+}
+
+const char *zoneName(uint8_t zone) {
+  if (zone == 0) return "A";
+  if (zone == 1) return "B";
+  return "C";
+}
+
+void addLog(const String &line) {
+  logLines[logIndex] = line;
+  logIndex = (logIndex + 1) % 12;
+  Serial.println(line);
+}
+
+String dashboardJson() {
+  int scoreA, scoreB, scoreC;
+  computeZoneScores(scoreA, scoreB, scoreC);
+
+  String json = "{";
+  json += "\"zones\":[";
+  json += "{\"name\":\"A\",\"score\":";
+  json += String(scoreA);
+  json += ",\"status\":\"";
+  json += statusForScore(scoreA);
+  json += "\"},";
+  json += "{\"name\":\"B\",\"score\":";
+  json += String(scoreB);
+  json += ",\"status\":\"";
+  json += statusForScore(scoreB);
+  json += "\"},";
+  json += "{\"name\":\"C\",\"score\":";
+  json += String(scoreC);
+  json += ",\"status\":\"";
+  json += statusForScore(scoreC);
+  json += "\"}";
+  json += "],";
+
+  json += "\"nodes\":[";
+  for (uint8_t i = 1; i <= 6; i++) {
+    if (i > 1) json += ",";
+    json += "{";
+    json += "\"id\":";
+    json += String(i);
+    json += ",\"score\":";
+    json += String(nodes[i].fireScore);
+    json += ",\"co\":";
+    json += String(nodes[i].coPpm);
+    json += ",\"mq2\":";
+    json += String(nodes[i].mq2Smooth);
+    json += ",\"mq7\":";
+    json += String(nodes[i].mq7Raw);
+    json += ",\"temp\":";
+    json += String(nodes[i].tempC, 1);
+    json += ",\"hum\":";
+    json += String(nodes[i].humidity, 1);
+    json += ",\"flame\":";
+    json += nodes[i].flameConfirmed ? "true" : "false";
+    json += ",\"gas\":";
+    json += nodes[i].gasLeakMode ? "true" : "false";
+    json += ",\"sos\":";
+    json += nodes[i].sosActive ? "true" : "false";
+    json += ",\"online\":";
+    json += nodeOnline(i) ? "true" : "false";
+    json += ",\"active\":";
+    json += nodeActive(i) ? "true" : "false";
+    json += ",\"forced\":";
+    json += nodes[i].forced ? "true" : "false";
+    json += ",\"age\":";
+    if (nodes[i].lastSeen > 0) json += String((millis() - nodes[i].lastSeen) / 1000);
+    else json += "-1";
+    json += "}";
+  }
+  json += "],";
+
+  json += "\"exits\":[";
+  for (uint8_t i = 0; i < 3; i++) {
+    if (i > 0) json += ",";
+    json += "{\"name\":\"";
+    json += (char)('A' + i);
+    json += "\",\"motion\":";
+    json += exits[i].motion ? "true" : "false";
+    json += ",\"congested\":";
+    json += exits[i].congested ? "true" : "false";
+    json += ",\"forced\":";
+    json += exits[i].forced ? "true" : "false";
+    json += "}";
+  }
+  json += "],";
+
+  json += "\"alerts\":{";
+  json += "\"fire\":";
+  json += anyFire() ? "true" : "false";
+  json += ",\"gas\":";
+  json += anyGas() ? "true" : "false";
+  json += ",\"sos\":";
+  json += anySos() ? "true" : "false";
+  json += "},";
+  json += "\"sosLocations\":\"";
+  String sos = sosLocations();
+  sos.replace("\\", "\\\\");
+  sos.replace("\"", "\\\"");
+  json += sos;
+  json += "\",";
+  json += "\"gasLocations\":\"";
+  String gas = gasLocations();
+  gas.replace("\\", "\\\\");
+  gas.replace("\"", "\\\"");
+  json += gas;
+  json += "\",";
+
+  json += "\"irTarget\":\"";
+  json += irTargetName();
+  json += "\",";
+  json += "\"pendingMap\":";
+  json += String(pendingNodeMap);
+  json += ",";
+
+  json += "\"log\":[";
+  for (uint8_t i = 0; i < 12; i++) {
+    uint8_t idx = (logIndex + i) % 12;
+    if (i > 0) json += ",";
+    String line = logLines[idx];
+    line.replace("\\", "\\\\");
+    line.replace("\"", "\\\"");
+    json += "\"" + line + "\"";
+  }
+  json += "]}";
+  return json;
+}
+
+void pushDashboard() {
+  ws.textAll(dashboardJson());
+}
+
+
+
 String htmlPage() {
   return R"rawliteral(
 <!doctype html>
