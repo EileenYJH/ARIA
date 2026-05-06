@@ -767,43 +767,24 @@ void drawZone(uint8_t zone, ZoneRender zr) {
 }
 
 void drawChaseRange(uint8_t start, uint8_t end, Direction dir, CRGB color) {
-  // Single moving packet — 1 lead pixel + trailing fade pixels based on proximity to exit
-  // No secondary packet — keeps it clean and avoids colour mixing
   int len = (int)end - (int)start + 1;
   if (len <= 0) return;
 
   int progress = chaseStep % len;
-  // Lead pixel position
   int lead = (dir == DIR_LEFT)
     ? ((int)end - progress)
     : ((int)start + progress);
 
-  auto inRange = [&](int p) -> bool {
-    return p >= (int)start && p <= (int)end;
-  };
-
-  // Distance from exit determines trail length (proximity packing)
-  int exitPos  = (dir == DIR_LEFT) ? (int)start : (int)end;
+  int exitPos    = (dir == DIR_LEFT) ? (int)start : (int)end;
   int distToExit = abs(lead - exitPos);
 
-  int trailLen;
-  if      (distToExit <= 2) trailLen = 4;  // dense near exit
-  else if (distToExit <= 5) trailLen = 3;  // medium
-  else if (distToExit <= 8) trailLen = 2;  // sparse
-  else                      trailLen = 1;  // very sparse far from exit
+  // Packet size: 1 LED when far from exit, grows to 2 then 3 as it closes in
+  int pktSize = (distToExit <= 2) ? 3 : (distToExit <= 4) ? 2 : 1;
 
-  // Draw lead pixel at full brightness
-  if (inRange(lead)) leds[lead] = color;
-
-  // Draw trail pixels behind the lead, dimming progressively
-  for (int t = 1; t < trailLen; t++) {
-    int tp = (dir == DIR_LEFT) ? (lead + t) : (lead - t);
-    if (!inRange(tp)) continue;
-    CRGB trailColor = color;
-    // Dim each trail pixel: 60% → 35% → 15%
-    uint8_t dim = (t == 1) ? 150 : (t == 2) ? 90 : 40;
-    trailColor.nscale8_video(dim);
-    leds[tp] = trailColor;
+  // All pixels in the packet are full brightness — trailing pixels sit behind the lead
+  for (int p = 0; p < pktSize; p++) {
+    int pos = (dir == DIR_LEFT) ? (lead + p) : (lead - p);
+    if (pos >= (int)start && pos <= (int)end) leds[pos] = color;
   }
 }
 
