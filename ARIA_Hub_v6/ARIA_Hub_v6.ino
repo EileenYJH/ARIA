@@ -474,17 +474,29 @@ void updateLdrExit(uint8_t idx, unsigned long now) {
   }
 
   // Rising edge: beam restored — person has fully passed through
-  if (!cut && wasCut) {
-    if (e.blockStart > 0 && (now - e.blockStart) < LDR_OBSTRUCT_MS) {
+  if (!cut && wasCut && e.blockStart > 0) {
+    unsigned long dur = now - e.blockStart;
+    // 50 ms minimum debounce (reject noise); must clear before 8-s obstruction threshold
+    if (dur >= 50 && dur < LDR_OBSTRUCT_MS) {
       e.personCount++;
       e.totalPersons++;
-      char ex = 'A' + idx;
-      addLog(String("[LDR] Exit ") + ex + " person #" + String(e.totalPersons) + " (" + String(e.personCount) + " this window)");
+      addLog(String("[LDR] Exit ") + char('A'+idx) +
+             " person #" + String(e.totalPersons) +
+             " (" + String(e.personCount) + " this window)");
+      // Trigger congestion immediately the instant the threshold is crossed
+      // — don't wait for the 30-s boundary; the window is used to CLEAR congestion
+      if (!e.congested && !e.obstruction && e.personCount > LDR_CONGESTION_COUNT) {
+        e.congested = true;
+        needsImmediatePush = true;
+        addLog(String("[LDR] Exit ") + char('A'+idx) +
+               " CONGESTED (" + String(e.personCount) + " persons this window)");
+      }
     }
     e.blockStart = 0;
     if (e.obstruction) {
       e.obstruction = false;
-      addLog(String("[LDR] Exit ") + char('A' + idx) + " obstruction cleared");
+      needsImmediatePush = true;
+      addLog(String("[LDR] Exit ") + char('A'+idx) + " obstruction cleared");
     }
   }
 
@@ -492,16 +504,18 @@ void updateLdrExit(uint8_t idx, unsigned long now) {
   if (cut && e.blockStart > 0 && !e.obstruction && (now - e.blockStart >= LDR_OBSTRUCT_MS)) {
     e.obstruction = true;
     e.congested = true;
-    addLog(String("[LDR] Exit ") + char('A' + idx) + " OBSTRUCTION — beam blocked >8s — EMERGENCY");
+    needsImmediatePush = true;
+    addLog(String("[LDR] Exit ") + char('A'+idx) + " OBSTRUCTION — beam blocked >8s — EMERGENCY");
   }
 
-  // 30-second window: evaluate congestion then reset counter
+  // 30-second window: re-evaluate to CLEAR congestion if rate has dropped, then reset counter
   if (now - e.windowStart >= LDR_WINDOW_MS) {
     if (!e.obstruction) {
       bool prev = e.congested;
       e.congested = (e.personCount > LDR_CONGESTION_COUNT);
       if (e.congested != prev) {
-        addLog(String("[LDR] Exit ") + char('A' + idx) +
+        needsImmediatePush = true;
+        addLog(String("[LDR] Exit ") + char('A'+idx) +
                (e.congested ? " CONGESTED" : " clear") +
                " (" + String(e.personCount) + " persons/30s)");
       }
