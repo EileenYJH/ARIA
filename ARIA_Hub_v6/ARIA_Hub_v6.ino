@@ -230,6 +230,7 @@ void onDataRecv(const uint8_t *mac, const uint8_t *incomingData, int len) {
   if (packet.nodeID == 0 && pendingNodeMap >= 1 && pendingNodeMap <= 6) {
     packet.nodeID = pendingNodeMap;
     addLog(String("[MAP] Unassigned node remapped to Node ") + String(pendingNodeMap));
+    pendingNodeMap = 0;  // consumed — prevent later unassigned nodes from colliding
   } else if (packet.nodeID == 0) {
     packet.nodeID = 1;
     addLog("[MAP] Unassigned node defaulted to Node 1");
@@ -900,11 +901,13 @@ void runCommand(String cmd, bool fromWeb) {
         sendNodeCommand((uint8_t)target, String("SETNODE ") + String(newId));
       }
     } else {
-      // Option B: set hub-side pending map for next unassigned packet
       int newId = rest.toInt();
       if (newId >= 1 && newId <= 6) {
         pendingNodeMap = (uint8_t)newId;
-        addLog(String("[MAP] Hub will remap next unassigned node to Node ") + String(newId));
+        // Tell any currently-unassigned (ID=0) node to adopt this ID immediately
+        // so data arrives on the next packet rather than waiting for a hub-side remap
+        sendNodeCommand(0, String("SETNODE ") + String(newId));
+        addLog(String("[MAP] Node ") + String(newId) + " assigned — broadcasting SETNODE to unassigned nodes");
       } else if (newId == 0) {
         pendingNodeMap = 0;
         addLog("[MAP] Node remapping cleared");
