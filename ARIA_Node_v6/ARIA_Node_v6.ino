@@ -7,7 +7,7 @@
     GPIO 25 -> flame stand-in digital sensor, LOW = flame
     GPIO 26 -> SOS button, INPUT_PULLUP
     GPIO 27 -> red strobe LED
-    GPIO 12 -> green ventilation LED
+    GPIO 18 -> relay 5V (DC fan + indicator LED in same circuit)
     GPIO 13 -> buzzer
     GPIO 23 -> SOS LED
     GPIO 33 -> MQ-7 analog
@@ -26,7 +26,7 @@
 #define PIN_FLAME    25
 #define PIN_SOS      26
 #define PIN_STROBE   27
-#define PIN_VENT     12
+#define PIN_FAN      18
 #define PIN_BUZZER   13
 #define PIN_SOS_LED  23
 #define PIN_MQ7      33
@@ -140,7 +140,7 @@ int histIdx = 0;
 int fireScore = 0;
 int prevScore = -1;
 bool gasLeakMode = false;
-bool ventOn = false;
+bool fanOn = false;
 bool strobeActive = false;
 bool strobeState = false;
 bool sosActive = false;
@@ -208,7 +208,7 @@ int convertMq7ToCoPpm(int mq7Raw);
 bool updateGasLeak(const SensorData &d);
 int calculateFireScore(const SensorData &d);
 void updateLocalActions(const SensorData &d, unsigned long now);
-void updateVentilation(const SensorData &d);
+void updateFan(const SensorData &d);
 void updateStrobe(unsigned long now);
 void updateSosButton(unsigned long now);
 void updateSosMorse(unsigned long now, bool buzzerAllowed);
@@ -225,12 +225,12 @@ void setup() {
   pinMode(PIN_FLAME, INPUT);
   pinMode(PIN_SOS, INPUT_PULLUP);
   pinMode(PIN_STROBE, OUTPUT);
-  pinMode(PIN_VENT, OUTPUT);
+  pinMode(PIN_FAN, OUTPUT);
   pinMode(PIN_BUZZER, OUTPUT);
   pinMode(PIN_SOS_LED, OUTPUT);
 
   digitalWrite(PIN_STROBE, LOW);
-  digitalWrite(PIN_VENT, LOW);
+  digitalWrite(PIN_FAN, LOW);
   digitalWrite(PIN_SOS_LED, LOW);
   noTone(PIN_BUZZER);
 
@@ -242,9 +242,9 @@ void setup() {
   }
 
   Serial.println();
-  Serial.println("ARIA Node v6 - awaiting node ID assignment");
-  Serial.println("Type: SETNODE 1  (or 2, 3, 4, 5, 6)");
-  Serial.println("Node will not transmit until ID is set.");
+  Serial.println("ARIA Node v6 ready");
+  Serial.println("Transmitting as unassigned (ID=0) - hub will map to Node 1 by default.");
+  Serial.println("To assign a specific ID, type: SETNODE 1  (or 2-6)");
   Serial.println();
 
   setupEspNow();
@@ -267,7 +267,7 @@ void loop() {
     gasLeakMode = updateGasLeak(d);
     fireScore = forceFireMode ? 7 : (gasLeakMode ? 0 : calculateFireScore(d));
     updateLocalActions(d, now);
-    updateVentilation(d);
+    updateFan(d);
 
     if (now - lastReportTime >= REPORT_INTERVAL_MS) {
       lastReportTime = now;
@@ -370,8 +370,8 @@ void applyRemoteCommand(const String &remoteCmd) {
     return;
   }
   if (cmd == "SCORE") {
-    Serial.printf("[RCMD] Node: %u Score: %d Gas: %s SOS: %s Vent: %s\n",
-      nodeID, fireScore, gasLeakMode ? "YES" : "no", sosActive ? "YES" : "no", ventOn ? "ON" : "off");
+    Serial.printf("[RCMD] Node: %u Score: %d Gas: %s SOS: %s Fan: %s\n",
+      nodeID, fireScore, gasLeakMode ? "YES" : "no", sosActive ? "YES" : "no", fanOn ? "ON" : "off");
     return;
   }
 
@@ -550,25 +550,25 @@ void updateLocalActions(const SensorData &d, unsigned long now) {
   prevScore = fireScore;
 }
 
-void updateVentilation(const SensorData &d) {
-  bool shouldVent = false;
+void updateFan(const SensorData &d) {
+  bool shouldRun = false;
 
   if (fireScore >= SCORE_FIRE) {
-    shouldVent = false;
+    shouldRun = false;  // fan off during fire — avoid spreading smoke
   } else if (gasLeakMode) {
-    shouldVent = true;
+    shouldRun = true;
   } else {
-    bool smokeVent = ventOn ? (d.mq2Smooth > mq2Baseline) : (d.mq2Smooth > mq2SlightSmoke);
-    bool coVent = d.coPpm > CO_PPM_CONCERN;
-    bool humVent = ventOn ? (d.humidity > HUM_VENT_OFF) : (d.humidity > HUM_VENT_ON);
-    bool tempVent = ventOn ? (d.tempC > TEMP_VENT_OFF) : (d.tempC > TEMP_VENT_ON);
-    shouldVent = smokeVent || coVent || humVent || tempVent;
+    bool smokeRun = fanOn ? (d.mq2Smooth > mq2Baseline) : (d.mq2Smooth > mq2SlightSmoke);
+    bool coRun    = d.coPpm > CO_PPM_CONCERN;
+    bool humRun   = fanOn ? (d.humidity > HUM_VENT_OFF) : (d.humidity > HUM_VENT_ON);
+    bool tempRun  = fanOn ? (d.tempC > TEMP_VENT_OFF)  : (d.tempC > TEMP_VENT_ON);
+    shouldRun = smokeRun || coRun || humRun || tempRun;
   }
 
-  if (shouldVent != ventOn) {
-    ventOn = shouldVent;
-    digitalWrite(PIN_VENT, ventOn ? HIGH : LOW);
-    Serial.println(ventOn ? "[VENT] ON" : "[VENT] OFF");
+  if (shouldRun != fanOn) {
+    fanOn = shouldRun;
+    digitalWrite(PIN_FAN, fanOn ? HIGH : LOW);  // HIGH energises relay → fan + LED on
+    Serial.println(fanOn ? "[FAN] ON" : "[FAN] OFF");
   }
 }
 
@@ -711,8 +711,8 @@ void handleSerialCommands() {
     prevScore = -1;
     Serial.println("[CMD] Fire forced OFF");
   } else if (cmd == "SCORE") {
-    Serial.printf("[CMD] Node: %u  Score: %d  Gas: %s  SOS: %s  Vent: %s\n",
-      nodeID, fireScore, gasLeakMode ? "YES" : "no", sosActive ? "YES" : "no", ventOn ? "ON" : "off");
+    Serial.printf("[CMD] Node: %u  Score: %d  Gas: %s  SOS: %s  Fan: %s\n",
+      nodeID, fireScore, gasLeakMode ? "YES" : "no", sosActive ? "YES" : "no", fanOn ? "ON" : "off");
   } else if (cmd == "CALIB") {
     beginCalibration();
   } else if (cmd == "HELP") {
@@ -764,7 +764,7 @@ void printStatus(const SensorData &d) {
   Serial.printf("Fire score   : %d / 10\n", fireScore);
   Serial.printf("Gas leak     : %s\n", gasLeakMode ? "YES" : "no");
   Serial.printf("SOS          : %s\n", sosActive ? "YES" : "no");
-  Serial.printf("Vent         : %s\n", ventOn ? "ON" : "off");
+  Serial.printf("Fan          : %s\n", fanOn ? "ON" : "off");
   Serial.println("========================================");
 }
 
