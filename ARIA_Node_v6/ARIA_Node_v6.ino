@@ -12,6 +12,7 @@
     GPIO 23 -> SOS LED
     GPIO 33 -> MQ-7 analog
     GPIO 34 -> MQ-2 analog
+    GPIO 35 -> MQ-135 analog
 
   Required libraries:
     WiFi.h, esp_now.h, DHT.h
@@ -31,6 +32,7 @@
 #define PIN_SOS_LED  23
 #define PIN_MQ7      33
 #define PIN_MQ2      34
+#define PIN_MQ135    35
 
 #define WIFI_CHANNEL 11
 
@@ -42,6 +44,12 @@
 #define MQ2_GASLEAK_OFFSET  700
 #define MQ2_SPIKE_FLOOR     200
 #define MQ2_GASLEAK_FLOOR   200
+
+#define MQ135_CLEAN_OFFSET  200   // above baseline → slightly poor air
+#define MQ135_POOR_OFFSET   500   // above baseline → poor air quality
+#define MQ135_HAZARD_OFFSET 900   // above baseline → hazardous air
+#define MQ135_POOR_FLOOR    500   // absolute floor for "poor" trigger
+#define MQ135_HAZARD_FLOOR  900   // absolute floor for "hazardous" trigger
 
 #define CO_PPM_SAFE         25
 #define CO_PPM_CONCERN      35
@@ -85,6 +93,7 @@ typedef struct {
   int     mq2Smooth;
   int     mq7Raw;
   int     coPpm;
+  int     mq135Smooth;
   int     fireScore;
   bool    flameConfirmed;
   bool    gasLeakMode;
@@ -104,6 +113,8 @@ struct SensorData {
   int mq7Raw;
   int mq2Smooth;
   int coPpm;
+  int mq135Raw;
+  int mq135Smooth;
   float tempC;
   float humidity;
   bool flameConfirmed;
@@ -131,7 +142,13 @@ int mq2SlightSmoke = 550;
 int mq2Spike = 800;
 int mq2GasLeak = 1200;
 
+int mq135Baseline = 300;
+int mq135SlightPoor = 500;
+int mq135Poor = 800;
+int mq135Hazard = 1200;
+
 float mq2Ema = 400.0f;
+float mq135Ema = 300.0f;
 
 float humidityHistory[HISTORY_SIZE];
 int coHistory[HISTORY_SIZE];
@@ -162,6 +179,7 @@ unsigned long lastFireMsgTime = 0;
 
 long calibMq2Sum = 0;
 long calibMq7Sum = 0;
+long calibMq135Sum = 0;
 uint8_t calibSamples = 0;
 
 bool sosButtonStable = HIGH;
@@ -382,6 +400,7 @@ void beginCalibration() {
   calibrationActive = true;
   calibMq2Sum = 0;
   calibMq7Sum = 0;
+  calibMq135Sum = 0;
   calibSamples = 0;
   lastCalibSampleTime = 0;
 
@@ -396,32 +415,45 @@ void updateCalibration(unsigned long now) {
   if (lastCalibSampleTime != 0 && now - lastCalibSampleTime < CALIB_INTERVAL_MS) return;
 
   lastCalibSampleTime = now;
-  int m2 = analogRead(PIN_MQ2);
-  int m7 = analogRead(PIN_MQ7);
-  calibMq2Sum += m2;
-  calibMq7Sum += m7;
+  int m2   = analogRead(PIN_MQ2);
+  int m7   = analogRead(PIN_MQ7);
+  int m135 = analogRead(PIN_MQ135);
+  calibMq2Sum   += m2;
+  calibMq7Sum   += m7;
+  calibMq135Sum += m135;
   calibSamples++;
 
-  Serial.printf("  Sample %2u/%u  MQ2: %4d  MQ7: %4d\n", calibSamples, CALIB_SAMPLES, m2, m7);
+  Serial.printf("  Sample %2u/%u  MQ2: %4d  MQ7: %4d  MQ135: %4d\n",
+    calibSamples, CALIB_SAMPLES, m2, m7, m135);
 
   if (calibSamples < CALIB_SAMPLES) return;
 
   mq2Baseline = calibMq2Sum / CALIB_SAMPLES;
   mq7Baseline = max(1L, calibMq7Sum / CALIB_SAMPLES);
+  mq135Baseline = calibMq135Sum / CALIB_SAMPLES;
 
   mq2SlightSmoke = mq2Baseline + MQ2_CLEAN_OFFSET;
-  mq2Spike = max(mq2Baseline + MQ2_SPIKE_OFFSET, MQ2_SPIKE_FLOOR);
-  mq2GasLeak = max(mq2Baseline + MQ2_GASLEAK_OFFSET, MQ2_GASLEAK_FLOOR);
-  mq2Ema = mq2Baseline;
+  mq2Spike       = max(mq2Baseline + MQ2_SPIKE_OFFSET,   MQ2_SPIKE_FLOOR);
+  mq2GasLeak     = max(mq2Baseline + MQ2_GASLEAK_OFFSET, MQ2_GASLEAK_FLOOR);
+  mq2Ema         = mq2Baseline;
+
+  mq135SlightPoor = mq135Baseline + MQ135_CLEAN_OFFSET;
+  mq135Poor       = max(mq135Baseline + MQ135_POOR_OFFSET,   MQ135_POOR_FLOOR);
+  mq135Hazard     = max(mq135Baseline + MQ135_HAZARD_OFFSET, MQ135_HAZARD_FLOOR);
+  mq135Ema        = mq135Baseline;
 
   calibrationActive = false;
 
   Serial.println("----------------------------------------");
-  Serial.printf("MQ-2 baseline     : %d\n", mq2Baseline);
-  Serial.printf("MQ-2 slight smoke : %d\n", mq2SlightSmoke);
-  Serial.printf("MQ-2 spike        : %d\n", mq2Spike);
-  Serial.printf("MQ-2 gas leak     : %d\n", mq2GasLeak);
-  Serial.printf("MQ-7 baseline     : %d\n", mq7Baseline);
+  Serial.printf("MQ-2  baseline    : %d\n", mq2Baseline);
+  Serial.printf("MQ-2  slight smoke: %d\n", mq2SlightSmoke);
+  Serial.printf("MQ-2  spike       : %d\n", mq2Spike);
+  Serial.printf("MQ-2  gas leak    : %d\n", mq2GasLeak);
+  Serial.printf("MQ-7  baseline    : %d\n", mq7Baseline);
+  Serial.printf("MQ-135 baseline   : %d\n", mq135Baseline);
+  Serial.printf("MQ-135 slight poor: %d\n", mq135SlightPoor);
+  Serial.printf("MQ-135 poor       : %d\n", mq135Poor);
+  Serial.printf("MQ-135 hazard     : %d\n", mq135Hazard);
   Serial.println("Calibration complete.");
   Serial.println("========================================");
 
@@ -434,8 +466,13 @@ SensorData readSensors() {
   SensorData d;
   d.mq2Raw = analogRead(PIN_MQ2);
   d.mq7Raw = analogRead(PIN_MQ7);
-  mq2Ema = (0.3f * d.mq2Raw) + (0.7f * mq2Ema);
-  d.mq2Smooth = (int)mq2Ema;
+  d.mq135Raw = analogRead(PIN_MQ135);
+
+  mq2Ema   = (0.3f * d.mq2Raw)   + (0.7f * mq2Ema);
+  mq135Ema = (0.3f * d.mq135Raw) + (0.7f * mq135Ema);
+
+  d.mq2Smooth   = (int)mq2Ema;
+  d.mq135Smooth = (int)mq135Ema;
   d.coPpm = convertMq7ToCoPpm(d.mq7Raw);
 
   d.humidity = dht.readHumidity();
@@ -488,8 +525,12 @@ float coRate() {
 }
 
 bool updateGasLeak(const SensorData &d) {
+  // MQ-2 gas leak pattern (LPG/propane/smoke without combustion)
+  bool mq2Pattern = d.mq2Smooth > mq2GasLeak;
+  // MQ-135 standalone chemical hazard (NH3, benzene, alcohol vapour)
+  bool mq135Pattern = d.mq135Smooth > mq135Hazard && d.mq2Smooth < mq2Spike;
   bool gasPattern =
-    d.mq2Smooth > mq2GasLeak &&
+    (mq2Pattern || mq135Pattern) &&
     d.coPpm < CO_PPM_SAFE &&
     !d.flameConfirmed &&
     humidityRate() > -1.0f;
@@ -512,16 +553,35 @@ int calculateFireScore(const SensorData &d) {
   float hRate = humidityRate();
   float cRate = coRate();
 
+  // MQ-2: smoke / combustible gas
   if (d.mq2Smooth > mq2Spike) score += 1;
+
+  // MQ-7: carbon monoxide
   if (d.coPpm > CO_PPM_CONCERN && cRate > 10.0f) score += 3;
   if (d.coPpm > 30) score += 2;
   else if (d.coPpm > CO_PPM_CONCERN) score += 1;
+
+  // DHT22: humidity drop = fire drying the air
   if (hRate < -HUM_DROP_THRESHOLD) score += 1;
+
+  // Flame sensor
   if (d.flameConfirmed) score += 3;
 
-  if (d.mq2Smooth > mq2Spike && d.coPpm < CO_PPM_CONCERN) score -= 2;
+  // MQ-135: air quality cross-confirmation
+  // Both MQ-2 and MQ-135 elevated → stronger evidence of fire/smoke
+  if (d.mq135Smooth > mq135Poor && d.mq2Smooth > mq2SlightSmoke) score += 1;
+  // Hazardous air confirmed alongside flame → fire is well developed
+  if (d.mq135Smooth > mq135Hazard && d.flameConfirmed) score += 1;
+
+  // Negative corrections — reduce false positives
+  // MQ-2 spike but no CO and clean air quality → dust / steam, not fire
+  if (d.mq2Smooth > mq2Spike && d.coPpm < CO_PPM_CONCERN && d.mq135Smooth < mq135SlightPoor) score -= 2;
+  // Smoke + rising humidity → cooking / steam
   if (d.mq2Smooth > mq2SlightSmoke && hRate > HUM_RISE_THRESHOLD) score -= 2;
+  // Slow CO rise, no flame, no smoke, clean MQ-135 → benign background CO
   if (d.coPpm > CO_PPM_CONCERN && cRate < 3.0f && !d.flameConfirmed && d.mq2Smooth < mq2Spike) score -= 1;
+  // MQ-135 hazard but MQ-2 clean and no flame → chemical gas, not fire
+  if (d.mq135Smooth > mq135Poor && d.mq2Smooth < mq2SlightSmoke && !d.flameConfirmed) score -= 1;
 
   return constrain(score, 0, 10);
 }
@@ -558,11 +618,12 @@ void updateFan(const SensorData &d) {
   } else if (gasLeakMode) {
     shouldRun = true;
   } else {
-    bool smokeRun = fanOn ? (d.mq2Smooth > mq2Baseline) : (d.mq2Smooth > mq2SlightSmoke);
-    bool coRun    = d.coPpm > CO_PPM_CONCERN;
-    bool humRun   = fanOn ? (d.humidity > HUM_VENT_OFF) : (d.humidity > HUM_VENT_ON);
-    bool tempRun  = fanOn ? (d.tempC > TEMP_VENT_OFF)  : (d.tempC > TEMP_VENT_ON);
-    shouldRun = smokeRun || coRun || humRun || tempRun;
+    bool smokeRun   = fanOn ? (d.mq2Smooth > mq2Baseline)       : (d.mq2Smooth > mq2SlightSmoke);
+    bool coRun      = d.coPpm > CO_PPM_CONCERN;
+    bool humRun     = fanOn ? (d.humidity > HUM_VENT_OFF)        : (d.humidity > HUM_VENT_ON);
+    bool tempRun    = fanOn ? (d.tempC > TEMP_VENT_OFF)          : (d.tempC > TEMP_VENT_ON);
+    bool airQualRun = fanOn ? (d.mq135Smooth > mq135Baseline)    : (d.mq135Smooth > mq135SlightPoor);
+    shouldRun = smokeRun || coRun || humRun || tempRun || airQualRun;
   }
 
   if (shouldRun != fanOn) {
@@ -676,16 +737,17 @@ void sendPacket() {
   if (!espNowReady) return;
 
   NodePacket packet;
-  packet.nodeID = nodeID;
-  packet.mq2Smooth = (int)mq2Ema;
-  packet.mq7Raw = analogRead(PIN_MQ7);
-  packet.coPpm = convertMq7ToCoPpm(packet.mq7Raw);
-  packet.fireScore = fireScore;
+  packet.nodeID       = nodeID;
+  packet.mq2Smooth    = (int)mq2Ema;
+  packet.mq7Raw       = analogRead(PIN_MQ7);
+  packet.coPpm        = convertMq7ToCoPpm(packet.mq7Raw);
+  packet.mq135Smooth  = (int)mq135Ema;
+  packet.fireScore    = fireScore;
   packet.flameConfirmed = flameConfirmed;
-  packet.gasLeakMode = gasLeakMode;
-  packet.sosActive = sosActive;
-  packet.tempC = dht.readTemperature();
-  packet.humidity = dht.readHumidity();
+  packet.gasLeakMode  = gasLeakMode;
+  packet.sosActive    = sosActive;
+  packet.tempC        = dht.readTemperature();
+  packet.humidity     = dht.readHumidity();
   if (isnan(packet.tempC)) packet.tempC = 27.0f;
   if (isnan(packet.humidity)) packet.humidity = humidityHistory[(histIdx - 1 + HISTORY_SIZE) % HISTORY_SIZE];
 
@@ -755,9 +817,11 @@ void printHelp() {
 void printStatus(const SensorData &d) {
   Serial.println("========================================");
   Serial.printf("Node ID      : %u%s\n", nodeID, nodeID == 0 ? " (not assigned)" : "");
-  Serial.printf("MQ-2 smooth  : %d  baseline:%d slight:%d spike:%d gas:%d\n",
+  Serial.printf("MQ-2  smooth : %d  baseline:%d slight:%d spike:%d gas:%d\n",
     d.mq2Smooth, mq2Baseline, mq2SlightSmoke, mq2Spike, mq2GasLeak);
-  Serial.printf("MQ-7 raw     : %d  CO ppm:%d\n", d.mq7Raw, d.coPpm);
+  Serial.printf("MQ-7  raw    : %d  CO ppm:%d\n", d.mq7Raw, d.coPpm);
+  Serial.printf("MQ-135 smooth: %d  baseline:%d slight:%d poor:%d hazard:%d\n",
+    d.mq135Smooth, mq135Baseline, mq135SlightPoor, mq135Poor, mq135Hazard);
   Serial.printf("Temp/Hum     : %.1f C / %.1f %%\n", d.tempC, d.humidity);
   Serial.printf("Rates        : CO %.1f / Hum %.1f\n", coRate(), humidityRate());
   Serial.printf("Flame        : %s\n", d.flameConfirmed ? "YES" : "no");

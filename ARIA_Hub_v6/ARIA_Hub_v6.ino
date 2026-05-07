@@ -77,6 +77,7 @@ typedef struct {
   int     mq2Smooth;
   int     mq7Raw;
   int     coPpm;
+  int     mq135Smooth;
   int     fireScore;
   bool    flameConfirmed;
   bool    gasLeakMode;
@@ -96,6 +97,7 @@ struct NodeState {
   int coPpm;
   int mq2Smooth;
   int mq7Raw;
+  int mq135Smooth;
   bool flameConfirmed;
   bool gasLeakMode;
   bool sosActive;
@@ -240,6 +242,7 @@ void onDataRecv(const uint8_t *mac, const uint8_t *incomingData, int len) {
   n.coPpm       = packet.coPpm;
   n.mq2Smooth   = packet.mq2Smooth;
   n.mq7Raw      = packet.mq7Raw;
+  n.mq135Smooth = packet.mq135Smooth;
   n.tempC       = packet.tempC;
   n.humidity    = packet.humidity;
   n.lastSeen    = millis();
@@ -1026,8 +1029,8 @@ void printStatus() {
   Serial.printf("Zone B: %d (%s)\n", scoreB, statusForScore(scoreB));
   Serial.printf("Zone C: %d (%s)\n", scoreC, statusForScore(scoreC));
   for (uint8_t i = 1; i <= 6; i++) {
-    Serial.printf("Node %u: score=%d co=%d mq2=%d gas=%s sos=%s online=%s active=%s forced=%s\n",
-      i, nodes[i].fireScore, nodes[i].coPpm, nodes[i].mq2Smooth,
+    Serial.printf("Node %u: score=%d co=%d mq2=%d mq135=%d gas=%s sos=%s online=%s active=%s forced=%s\n",
+      i, nodes[i].fireScore, nodes[i].coPpm, nodes[i].mq2Smooth, nodes[i].mq135Smooth,
       nodes[i].gasLeakMode ? "YES" : "no",
       nodes[i].sosActive ? "YES" : "no",
       nodeOnline(i) ? "YES" : "no",
@@ -1186,6 +1189,8 @@ String dashboardJson() {
     json += String(nodes[i].mq2Smooth);
     json += ",\"mq7\":";
     json += String(nodes[i].mq7Raw);
+    json += ",\"mq135\":";
+    json += String(nodes[i].mq135Smooth);
     json += ",\"temp\":";
     json += String(nodes[i].tempC, 1);
     json += ",\"hum\":";
@@ -1982,6 +1987,8 @@ function render(s){
         +'<div class="ndivider"></div>'
         +'<div class="nrow"><span class="nlabel">Temp</span><span class="nval">'+n.temp+'&deg;C</span></div>'
         +'<div class="nrow"><span class="nlabel">Humidity</span><span class="nval">'+n.hum+'%</span></div>'
+        +'<div class="nrow"><span class="nlabel">MQ-2</span><span class="nval">'+n.mq2+'</span></div>'
+        +'<div class="nrow"><span class="nlabel">MQ-135</span><span class="nval">'+n.mq135+'</span></div>'
         +'<div class="nrow"><span class="nlabel">Flame</span><span class="nval '+(n.flame?'danger':'ok')+'">'+(n.flame?'YES':'No')+'</span></div>'
         +'<div class="nrow"><span class="nlabel">Gas</span><span class="nval '+(n.gas?'warn':'ok')+'">'+(n.gas?'YES':'No')+'</span></div>'
       )
