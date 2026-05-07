@@ -1874,25 +1874,21 @@ function drawMap(){
     }
     return[p[p.length-1][0],p[p.length-1][1]];
   }
-  function drawParticles(path,color,count){
+  function drawParticles(path,color){
     let total=_pL(path);if(total<1)return;
     let head=(animFrame*SPEED)%total;
-    for(let i=0;i<count;i++){
-      let d=(head+i*(total/count))%total;
-      let dte=total-d;
+    let dte=total-head;                         // distance left to exit
+    // 1 dot far from exit → 2 within 40% → 3 within 20% (mirrors physical LED)
+    let pkt=dte<total*0.2?3:dte<total*0.4?2:1;
+    let gap=9;                                  // pixel spacing inside the packet
+    for(let p=0;p<pkt;p++){
+      let d=head-p*gap; if(d<0)break;
       let[px,py]=_pt(path,d);
+      let ga=p===0?'cc':'88';                   // lead dot glows slightly more
       let g=ctx.createRadialGradient(px,py,0,px,py,9);
-      g.addColorStop(0,color+'cc');g.addColorStop(1,color+'00');
+      g.addColorStop(0,color+ga);g.addColorStop(1,color+'00');
       ctx.fillStyle=g;ctx.beginPath();ctx.arc(px,py,9,0,Math.PI*2);ctx.fill();
       ctx.fillStyle=color;ctx.beginPath();ctx.arc(px,py,3.5,0,Math.PI*2);ctx.fill();
-      let tc=dte<total*0.15?4:dte<total*0.3?2:1;
-      let ts=dte<total*0.15?5:8;
-      for(let t=1;t<=tc;t++){
-        let td=d-t*ts;if(td<0)break;
-        let[tx,ty]=_pt(path,td);
-        let a=Math.floor((1-t/(tc+1))*170).toString(16).padStart(2,'0');
-        ctx.fillStyle=color+a;ctx.beginPath();ctx.arc(tx,ty,2.5,0,Math.PI*2);ctx.fill();
-      }
     }
   }
 
@@ -1926,20 +1922,20 @@ function drawMap(){
   let allF=fA&&fB&&fC;
 
   // Zone A
-  if(!fA)       drawParticles(pA,  gcA,       3);
-  else if(allF) drawParticles(pA,  '#ef4444', 3);
-  else if(!fB)  drawParticles(pAB, '#ef4444', 2);
-  else          drawParticles(pAC, '#ef4444', 2);
+  if(!fA)       drawParticles(pA,  gcA);
+  else if(allF) drawParticles(pA,  '#ef4444');
+  else if(!fB)  drawParticles(pAB, '#ef4444');
+  else          drawParticles(pAC, '#ef4444');
   // Zone B
-  if(!fB)       drawParticles(pB,  gcB,       3);
-  else if(allF) drawParticles(pB,  '#ef4444', 3);
-  else if(!fA)  drawParticles(pBA, '#ef4444', 2);
-  else          drawParticles(pBC, '#ef4444', 2);
+  if(!fB)       drawParticles(pB,  gcB);
+  else if(allF) drawParticles(pB,  '#ef4444');
+  else if(!fA)  drawParticles(pBA, '#ef4444');
+  else          drawParticles(pBC, '#ef4444');
   // Zone C
-  if(!fC)       drawParticles(pC,  gcC,       3);
-  else if(allF) drawParticles(pC,  '#ef4444', 3);
-  else if(!fB)  drawParticles(pCB, '#ef4444', 2);
-  else          drawParticles(pCA, '#ef4444', 2);
+  if(!fC)       drawParticles(pC,  gcC);
+  else if(allF) drawParticles(pC,  '#ef4444');
+  else if(!fB)  drawParticles(pCB, '#ef4444');
+  else          drawParticles(pCA, '#ef4444');
 
   requestAnimationFrame(drawMap);
 }
