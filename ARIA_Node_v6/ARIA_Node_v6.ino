@@ -283,7 +283,9 @@ void loop() {
     SensorData d = readSensors();
     updateHistory(d);
     gasLeakMode = updateGasLeak(d);
-    fireScore = forceFireMode ? 7 : (gasLeakMode ? 0 : calculateFireScore(d));
+    // Fire score is always calculated — gasLeakMode is a separate actuator flag,
+    // not a reason to suppress fire detection (they can co-exist briefly during transition)
+    fireScore = forceFireMode ? 7 : calculateFireScore(d);
     updateLocalActions(d, now);
     updateFan(d);
 
@@ -553,35 +555,36 @@ int calculateFireScore(const SensorData &d) {
   float hRate = humidityRate();
   float cRate = coRate();
 
+  // Flame sensor: definitive physical evidence — guarantees SCORE_FIRE on its own
+  if (d.flameConfirmed) score += 5;
+
   // MQ-2: smoke / combustible gas
-  if (d.mq2Smooth > mq2Spike) score += 1;
+  if (d.mq2Smooth > mq2Spike)         score += 2;
+  else if (d.mq2Smooth > mq2SlightSmoke) score += 1;
 
-  // MQ-7: carbon monoxide
-  if (d.coPpm > CO_PPM_CONCERN && cRate > 10.0f) score += 3;
-  if (d.coPpm > 30) score += 2;
-  else if (d.coPpm > CO_PPM_CONCERN) score += 1;
+  // MQ-7: carbon monoxide (fast rise is the strongest indicator)
+  if (d.coPpm > CO_PPM_CONCERN && cRate > 5.0f) score += 2;
+  else if (d.coPpm > CO_PPM_CONCERN)             score += 1;
 
-  // DHT22: humidity drop = fire drying the air
+  // DHT22: rapid humidity drop = fire drying the air
   if (hRate < -HUM_DROP_THRESHOLD) score += 1;
 
-  // Flame sensor
-  if (d.flameConfirmed) score += 3;
+  // MQ-135: corroborates poor / hazardous air quality
+  if (d.mq135Smooth > mq135Poor)   score += 1;
+  if (d.mq135Smooth > mq135Hazard) score += 1;
 
-  // MQ-135: air quality cross-confirmation
-  // Both MQ-2 and MQ-135 elevated → stronger evidence of fire/smoke
-  if (d.mq135Smooth > mq135Poor && d.mq2Smooth > mq2SlightSmoke) score += 1;
-  // Hazardous air confirmed alongside flame → fire is well developed
-  if (d.mq135Smooth > mq135Hazard && d.flameConfirmed) score += 1;
-
-  // Negative corrections — reduce false positives
-  // MQ-2 spike but no CO and clean air quality → dust / steam, not fire
-  if (d.mq2Smooth > mq2Spike && d.coPpm < CO_PPM_CONCERN && d.mq135Smooth < mq135SlightPoor) score -= 2;
-  // Smoke + rising humidity → cooking / steam
-  if (d.mq2Smooth > mq2SlightSmoke && hRate > HUM_RISE_THRESHOLD) score -= 2;
-  // Slow CO rise, no flame, no smoke, clean MQ-135 → benign background CO
-  if (d.coPpm > CO_PPM_CONCERN && cRate < 3.0f && !d.flameConfirmed && d.mq2Smooth < mq2Spike) score -= 1;
-  // MQ-135 hazard but MQ-2 clean and no flame → chemical gas, not fire
-  if (d.mq135Smooth > mq135Poor && d.mq2Smooth < mq2SlightSmoke && !d.flameConfirmed) score -= 1;
+  // Negative corrections — ONLY applied when there is NO confirmed flame.
+  // Never penalise a reading that already has direct fire evidence.
+  if (!d.flameConfirmed) {
+    // MQ-2 spike but CO clean and MQ-135 clean → dust, steam, or sensor glitch
+    if (d.mq2Smooth > mq2Spike && d.coPpm < CO_PPM_CONCERN && d.mq135Smooth < mq135SlightPoor) score -= 2;
+    // Smoke + rising humidity → cooking or steam
+    if (d.mq2Smooth > mq2SlightSmoke && hRate > HUM_RISE_THRESHOLD) score -= 2;
+    // Slow CO rise with no smoke → benign background CO (ventilation issue)
+    if (d.coPpm > CO_PPM_CONCERN && cRate < 3.0f && d.mq2Smooth < mq2Spike) score -= 1;
+    // MQ-135 elevated but MQ-2 clean → chemical vapour, not combustion
+    if (d.mq135Smooth > mq135Poor && d.mq2Smooth < mq2SlightSmoke) score -= 1;
+  }
 
   return constrain(score, 0, 10);
 }
@@ -622,7 +625,7 @@ void updateFan(const SensorData &d) {
     bool coRun      = d.coPpm > CO_PPM_CONCERN;
     bool humRun     = fanOn ? (d.humidity > HUM_VENT_OFF)        : (d.humidity > HUM_VENT_ON);
     bool tempRun    = fanOn ? (d.tempC > TEMP_VENT_OFF)          : (d.tempC > TEMP_VENT_ON);
-    bool airQualRun = fanOn ? (d.mq135Smooth > mq135Baseline)    : (d.mq135Smooth > mq135SlightPoor);
+    bool airQualRun = fanOn ? (d.mq135Smooth > mq135SlightPoor)  : (d.mq135Smooth > mq135Poor);
     shouldRun = smokeRun || coRun || humRun || tempRun || airQualRun;
   }
 
