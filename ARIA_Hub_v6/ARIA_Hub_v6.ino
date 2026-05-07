@@ -121,8 +121,6 @@ struct ExitState {
 enum Direction {
   DIR_LEFT,
   DIR_RIGHT,
-  DIR_SPLIT,
-  DIR_CONVERGE,
   DIR_PULSE,
   DIR_OFF
 };
@@ -187,7 +185,6 @@ void computeZoneScores(int &scoreA, int &scoreB, int &scoreC);
 void computeZoneRender(ZoneRender render[3]);
 void drawZone(uint8_t zone, ZoneRender zr);
 void drawChaseRange(uint8_t start, uint8_t end, Direction dir, CRGB color);
-void drawSplitZoneB(CRGB color);
 void drawPulseZone(uint8_t zone, CRGB color);
 CRGB colorFor(ZoneColor c);
 bool exitCongestedForZone(uint8_t zone);
@@ -681,7 +678,7 @@ void computeZoneRender(ZoneRender render[3]) {
 
   if (gasOnly) {
     render[0] = {COLOR_YELLOW, DIR_LEFT};
-    render[1] = {COLOR_YELLOW, DIR_SPLIT};
+    render[1] = {COLOR_YELLOW, DIR_RIGHT};
     render[2] = {COLOR_YELLOW, DIR_RIGHT};
     return;
   }
@@ -694,33 +691,33 @@ void computeZoneRender(ZoneRender render[3]) {
   if (!fireA && !fireB && !fireC) return;
 
   if (fireA && fireB && fireC) {
-    render[0] = {COLOR_RED, DIR_LEFT};      // Zone A → Exit A (chase left)
-    render[1] = {COLOR_RED, DIR_CONVERGE};  // Zone B → Exit B (chase inward to centre = downward)
-    render[2] = {COLOR_RED, DIR_RIGHT};     // Zone C → Exit C (chase right)
+    render[0] = {COLOR_RED, DIR_LEFT};    // Zone A → try Exit A
+    render[1] = {COLOR_RED, DIR_RIGHT};   // Zone B → try Exit B
+    render[2] = {COLOR_RED, DIR_RIGHT};   // Zone C → try Exit C
   } else if (fireA && fireC) {
-    render[0] = {COLOR_RED, DIR_RIGHT};
-    render[1] = {COLOR_GREEN, DIR_PULSE};
-    render[2] = {COLOR_RED, DIR_LEFT};
+    render[0] = {COLOR_RED, DIR_RIGHT};   // Zone A → corridor → Exit B
+    render[1] = {COLOR_GREEN, DIR_RIGHT}; // Zone B → Exit B (only safe exit)
+    render[2] = {COLOR_RED, DIR_LEFT};    // Zone C → corridor → Exit B
   } else if (fireA && fireB) {
-    render[0] = {COLOR_RED, DIR_RIGHT};
-    render[1] = {COLOR_RED, DIR_RIGHT};
-    render[2] = {COLOR_GREEN, DIR_RIGHT};
+    render[0] = {COLOR_RED, DIR_RIGHT};   // Zone A → corridor → Exit C
+    render[1] = {COLOR_RED, DIR_LEFT};    // Zone B → back to corridor → Exit C
+    render[2] = {COLOR_GREEN, DIR_RIGHT}; // Zone C → Exit C
   } else if (fireB && fireC) {
-    render[0] = {COLOR_GREEN, DIR_LEFT};
-    render[1] = {COLOR_RED, DIR_LEFT};
-    render[2] = {COLOR_RED, DIR_LEFT};
+    render[0] = {COLOR_GREEN, DIR_LEFT};  // Zone A → Exit A
+    render[1] = {COLOR_RED, DIR_LEFT};    // Zone B → back to corridor → Exit A
+    render[2] = {COLOR_RED, DIR_LEFT};    // Zone C → corridor → Exit A
   } else if (fireA) {
-    render[0] = {COLOR_RED, DIR_RIGHT};
-    render[1] = {COLOR_GREEN, DIR_SPLIT};
-    render[2] = {COLOR_GREEN, DIR_RIGHT};
+    render[0] = {COLOR_RED, DIR_RIGHT};   // Zone A → corridor → Exit B or C
+    render[1] = {COLOR_GREEN, DIR_RIGHT}; // Zone B → Exit B (safe)
+    render[2] = {COLOR_GREEN, DIR_RIGHT}; // Zone C → Exit C (safe)
   } else if (fireB) {
-    render[0] = {COLOR_GREEN, DIR_LEFT};
-    render[1] = {COLOR_RED, DIR_SPLIT};
-    render[2] = {COLOR_GREEN, DIR_RIGHT};
+    render[0] = {COLOR_GREEN, DIR_LEFT};  // Zone A → Exit A (safe)
+    render[1] = {COLOR_RED, DIR_LEFT};    // Zone B → back to corridor → Exit A or C
+    render[2] = {COLOR_GREEN, DIR_RIGHT}; // Zone C → Exit C (safe)
   } else if (fireC) {
-    render[0] = {COLOR_GREEN, DIR_LEFT};
-    render[1] = {COLOR_GREEN, DIR_SPLIT};
-    render[2] = {COLOR_RED, DIR_LEFT};
+    render[0] = {COLOR_GREEN, DIR_LEFT};  // Zone A → Exit A (safe)
+    render[1] = {COLOR_GREEN, DIR_RIGHT}; // Zone B → Exit B (safe)
+    render[2] = {COLOR_RED, DIR_LEFT};    // Zone C → corridor → Exit A or B
   }
 
   for (uint8_t z = 0; z < 3; z++) {
@@ -752,15 +749,6 @@ void drawZone(uint8_t zone, ZoneRender zr) {
     return;
   }
 
-  if (zone == 1 && zr.direction == DIR_SPLIT) {
-    drawSplitZoneB(c);
-    return;
-  }
-  if (zone == 1 && zr.direction == DIR_CONVERGE) {
-    drawConvergeZoneB(c);
-    return;
-  }
-
   uint8_t start = zone * ZONE_LEN;
   uint8_t end = start + ZONE_LEN - 1;
   drawChaseRange(start, end, zr.direction, c);
@@ -786,16 +774,6 @@ void drawChaseRange(uint8_t start, uint8_t end, Direction dir, CRGB color) {
     int pos = (dir == DIR_LEFT) ? (lead + p) : (lead - p);
     if (pos >= (int)start && pos <= (int)end) leds[pos] = color;
   }
-}
-
-void drawSplitZoneB(CRGB color) {
-  drawChaseRange(10, 14, DIR_LEFT, color);
-  drawChaseRange(15, 19, DIR_RIGHT, color);
-}
-
-void drawConvergeZoneB(CRGB color) {
-  drawChaseRange(10, 14, DIR_RIGHT, color);  // left half chases right toward centre
-  drawChaseRange(15, 19, DIR_LEFT, color);   // right half chases left toward centre
 }
 
 void drawPulseZone(uint8_t zone, CRGB color) {
