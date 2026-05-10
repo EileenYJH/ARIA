@@ -207,7 +207,6 @@ void printStatus();
 void clearAllState();
 void pushDashboard();
 String dashboardJson();
-String htmlPage();
 void addLog(const String &line);
 const char *zoneName(uint8_t zone);
 const char *statusForScore(int score);
@@ -324,7 +323,7 @@ void setup() {
 void loop() {
   unsigned long now = millis();
 
-  ws.cleanupClients();
+  ws.cleanupClients(8);
   dnsServer.processNextRequest();
   handleSerialCommands();
   updateExitCongestion(now);
@@ -355,7 +354,7 @@ void loop() {
 
 void setupEspNow() {
   WiFi.mode(WIFI_AP_STA);
-  WiFi.softAP(AP_SSID, AP_PASSWORD, WIFI_CHANNEL);
+  WiFi.softAP(AP_SSID, AP_PASSWORD, WIFI_CHANNEL, 0, 8);
   esp_wifi_set_channel(WIFI_CHANNEL, WIFI_SECOND_CHAN_NONE);
 
   if (esp_now_init() != ESP_OK) {
@@ -437,7 +436,7 @@ void setupDashboard() {
 
   server.addHandler(&ws);
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
-    request->send(200, "text/html; charset=utf-8", htmlPage());
+    request->send_P(200, "text/html", HTML_PAGE);
   });
   server.on("/generate_204", HTTP_GET, [](AsyncWebServerRequest *request) {
     request->redirect("/");
@@ -446,7 +445,7 @@ void setupDashboard() {
     request->redirect("/");
   });
   server.on("/hotspot-detect.html", HTTP_GET, [](AsyncWebServerRequest *request) {
-    request->send(200, "text/html; charset=utf-8", htmlPage());
+    request->send_P(200, "text/html", HTML_PAGE);
   });
   server.on("/connecttest.txt", HTTP_GET, [](AsyncWebServerRequest *request) {
     request->redirect("/");
@@ -1345,8 +1344,7 @@ void pushDashboard() {
 
 
 
-String htmlPage() {
-  return R"rawliteral(
+static const char HTML_PAGE[] PROGMEM = R"rawliteral(
 <!doctype html>
 <html>
 <head>
@@ -2071,4 +2069,3 @@ connect();
 </body>
 </html>
 )rawliteral";
-}
