@@ -7,7 +7,7 @@
     GPIO 25 -> flame stand-in digital sensor, LOW = flame
     GPIO 26 -> SOS button, INPUT_PULLUP
     GPIO 27 -> red strobe LED
-    GPIO 18 -> relay 5V (DC fan + indicator LED in same circuit)
+    GPIO 19 -> relay 5V (DC fan + indicator LED in same circuit)
     GPIO 13 -> buzzer
     GPIO 23 -> SOS LED
     GPIO 33 -> MQ-7 analog
@@ -27,7 +27,7 @@
 #define PIN_FLAME    25
 #define PIN_SOS      26
 #define PIN_STROBE   27
-#define PIN_FAN      18
+#define PIN_FAN      19
 #define PIN_BUZZER   13
 #define PIN_SOS_LED  23
 #define PIN_MQ7      33
@@ -41,7 +41,7 @@
 
 #define MQ2_CLEAN_OFFSET    150
 #define MQ2_SPIKE_OFFSET    400
-#define MQ2_GASLEAK_OFFSET  700
+#define MQ2_GASLEAK_OFFSET  200
 #define MQ2_SPIKE_FLOOR     200
 #define MQ2_GASLEAK_FLOOR   200
 
@@ -53,7 +53,7 @@
 
 #define CO_PPM_SAFE         25
 #define CO_PPM_CONCERN      35
-#define CO_PPM_DANGEROUS    35
+#define CO_PPM_DANGEROUS    50
 #define CO_PPM_FIRE         70
 #define CO_PPM_CRITICAL     150
 
@@ -248,11 +248,14 @@ void setup() {
   pinMode(PIN_SOS_LED, OUTPUT);
 
   digitalWrite(PIN_STROBE, LOW);
-  digitalWrite(PIN_FAN, LOW);
-  digitalWrite(PIN_SOS_LED, LOW);
+  digitalWrite(PIN_FAN, HIGH);
+  digitalWrite(PIN_SOS_LED, HIGH);
   noTone(PIN_BUZZER);
 
   dht.begin();
+
+  mq2Ema   = (float)analogRead(PIN_MQ2);
+  mq135Ema = (float)analogRead(PIN_MQ135);
 
   for (int i = 0; i < HISTORY_SIZE; i++) {
     humidityHistory[i] = 65.0f;
@@ -631,7 +634,7 @@ void updateFan(const SensorData &d) {
 
   if (shouldRun != fanOn) {
     fanOn = shouldRun;
-    digitalWrite(PIN_FAN, fanOn ? HIGH : LOW);  // HIGH energises relay → fan + LED on
+    digitalWrite(PIN_FAN, fanOn ? LOW : HIGH);  // LOW energises relay → NO closes → fan on
     Serial.println(fanOn ? "[FAN] ON" : "[FAN] OFF");
   }
 }
@@ -789,8 +792,8 @@ void handleSerialCommands() {
 
 void handleSetNode(String cmd) {
   int id = cmd.substring(8).toInt();
-  if (id < 1 || id > 6) {
-    Serial.println("[CMD] Invalid node ID. Use SETNODE 1 through SETNODE 6.");
+  if (id < 0 || id > 6) {
+    Serial.println("[CMD] Invalid node ID. Use SETNODE 0 (unassign) or 1-6.");
     return;
   }
 

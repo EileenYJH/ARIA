@@ -186,7 +186,6 @@ const char *espNowErrName(int code);
 void setupDashboard();
 void updateExitCongestion(unsigned long now);
 void updateLdrExit(uint8_t idx, unsigned long now);
-void updateOutputs();
 void updateHubBuzzer(unsigned long now);
 void updateAlertNotifications(unsigned long now);
 void sendTelegramAlert(const String &text);
@@ -327,7 +326,6 @@ void loop() {
   dnsServer.processNextRequest();
   handleSerialCommands();
   updateExitCongestion(now);
-  updateOutputs();
   updateHubBuzzer(now);
   updateAlertNotifications(now);
   renderLedRouting(now);
@@ -349,6 +347,10 @@ void loop() {
   if (now - lastChRelock >= CH_RELOCK_MS) {
     lastChRelock = now;
     esp_wifi_set_channel(WIFI_CHANNEL, WIFI_SECOND_CHAN_NONE);
+    if (String(STA_SSID).length() > 0 && WiFi.status() != WL_CONNECTED) {
+      WiFi.begin(STA_SSID, STA_PASSWORD);
+      addLog("[NET] STA reconnecting...");
+    }
   }
 }
 
@@ -533,12 +535,6 @@ void updateLdrExit(uint8_t idx, unsigned long now) {
     e.personCount = 0;
     e.windowStart = now;
   }
-}
-
-void updateOutputs() {
-  bool fire = anyFire();
-  // Fan relay and ventilation handled at node level only
-  // Hub focuses on exit routing and LED guidance
 }
 
 inline void buzzerTick(unsigned long now, unsigned long onMs, unsigned long offMs) {
@@ -1018,6 +1014,15 @@ void runCommand(String cmd, bool fromWeb) {
       exits[e - 'A'].congested = false;
       addLog(String("[CMD] Exit ") + e + " congestion cleared");
     }
+  } else if (cmd.startsWith("CLEAR OBSTRUCTION ")) {
+    char e = cmd.charAt(18);
+    if (e >= 'A' && e <= 'C') {
+      exits[e - 'A'].obstruction = false;
+      exits[e - 'A'].congested   = false;
+      exits[e - 'A'].blockStart  = 0;
+      needsImmediatePush = true;
+      addLog(String("[CMD] Exit ") + e + " obstruction cleared");
+    }
   } else if (cmd == "CLEAR") {
     clearAllState();
     addLog("[CMD] All state cleared");
@@ -1036,6 +1041,7 @@ void runCommand(String cmd, bool fromWeb) {
     Serial.println("  FLAME <id> ON/OFF  force flame flag on one node");
     Serial.println("  CONGEST A/B/C      force exit congestion");
     Serial.println("  CLEAR CONGEST A/B/C");
+    Serial.println("  CLEAR OBSTRUCTION A/B/C");
     Serial.println("  CLEAR              reset all state");
     Serial.println("  STATUS             print node and exit state");
     Serial.println("  HELP               show commands");
@@ -1047,7 +1053,7 @@ void runCommand(String cmd, bool fromWeb) {
       !cmd.startsWith("SETNODE ") && !cmd.startsWith("SETSCORE ") &&
       !cmd.startsWith("GAS ") &&
       !cmd.startsWith("SOS ") && !cmd.startsWith("FLAME ") &&
-      !cmd.startsWith("CONGEST ") &&
+      !cmd.startsWith("CONGEST ") && !cmd.startsWith("CLEAR ") &&
       cmd != "CLEAR" && cmd != "STATUS") {
     addLog(String("[CHAT] ") + original);
   }
@@ -2011,7 +2017,7 @@ function render(s){
   document.getElementById('connBar').innerHTML = nodes.map(n => {
     let connected = n.online;
     let bc = connected ? 'live' : n.forced ? 'forced' : 'off';
-    let bt = connected ? 'CONNECTED' : 'ONLINE';
+    let bt = connected ? 'LIVE' : 'OFFLINE';
     return '<span class="cbadge '+bc+'">Node '+n.id+'<br><small>'+bt+'</small></span>';
   }).join('');
 
