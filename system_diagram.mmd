@@ -1,0 +1,98 @@
+flowchart LR
+
+    %% ── NODE ──────────────────────────────────────────────────────────────────
+    subgraph NODE["ARIA NODE  —  ESP32 DevKit C v4"]
+        direction TB
+
+        subgraph NS["Sensors"]
+            direction TB
+            DHT22["DHT22  GPIO 14\nTemp / Humidity"]
+            FLAME["Flame Sensor  GPIO 25\ndigital  LOW = fire"]
+            SOSBTN["SOS Button  GPIO 26\nINPUT_PULLUP"]
+            MQ2["MQ-2  GPIO 34\nSmoke / Gas  ADC"]
+            MQ7["MQ-7  GPIO 33\nCO Gas  ADC"]
+            MQ135["MQ-135  GPIO 35\nAir Quality  ADC"]
+        end
+
+        NPROC["Fire Score Engine\n0 – 10  composite score\nEMA smoothing per sensor\nGas leak detection\nCalibration  30 samples"]
+
+        subgraph NOUT["Outputs"]
+            direction TB
+            STROBE["Strobe LED  GPIO 27\n125 ms flash on fire"]
+            FAN["Fan Relay  GPIO 19\nactive LOW  NC contact"]
+            NBUZZ["Buzzer  GPIO 13\ntone patterns"]
+            SOSLED["SOS LED  GPIO 23\nMorse  · · · — — — · · ·"]
+        end
+
+        NS  --> NPROC
+        NPROC --> NOUT
+    end
+
+    %% ── HUB ───────────────────────────────────────────────────────────────────
+    subgraph HUB["ARIA HUB  —  ESP32 DevKit C v4"]
+        direction TB
+
+        subgraph HIN["LDR Laser Inputs"]
+            direction TB
+            LDRA["LDR + Laser  GPIO 34\nExit A  person count\ncongestion  obstruction"]
+            LDRB["LDR + Laser  GPIO 35\nExit B  person count\ncongestion  obstruction"]
+            LDRC["LDR + Laser  GPIO 32\nExit C  person count\ncongestion  obstruction"]
+        end
+
+        HPROC["Zone Score Engine\nZone A = max( Node 1, Node 5 )\nZone B = max( Node 2, Node 3 )\nZone C = max( Node 4, Node 6 )\nExit routing logic  |  Alert tiers 1 – 3"]
+
+        subgraph HOUT["Outputs"]
+            direction TB
+            LS1["LED Strip 1  GPIO 5\nWS2812B  30 px\nZone A(10)  B(10)  C(10)"]
+            LS2["LED Strip 2  GPIO 4\nWS2812B  40 px\nZone A(22)  +  C(18)"]
+            HBUZZ["Hub Buzzer  GPIO 16\n100ms rapid / 500ms / beep"]
+        end
+
+        WS["AsyncWebServer  :80\nAP  ARIA-HUB  192.168.4.1\nWebSocket  /ws\npush every 1 s  |  up to 8 clients"]
+
+        TGTASK["Telegram Task\ncore 0  HTTPS  TLS\nalert tiers  60 s cooldown\nauto-reconnect STA 30 s"]
+
+        HIN   --> HPROC
+        HPROC --> HOUT
+        HPROC --> WS
+        HPROC --> TGTASK
+    end
+
+    %% ── EXTERNAL ──────────────────────────────────────────────────────────────
+    ROUTER["Router / Hotspot\nWi-Fi  ch 11\nTelegram path only"]
+    TELEGRAM["Telegram Cloud\nBot API\nHTTPS"]
+    DASHBOARD["Dashboard\nPhone / Laptop\nup to 8 devices"]
+
+    %% ── CROSS-BLOCK CONNECTIONS ───────────────────────────────────────────────
+    NPROC  -->|"ESP-NOW  NodePacket\nevery 500 ms"| HPROC
+    HPROC  -->|"ESP-NOW  HubCommandPacket\non demand"| NPROC
+
+    WS      -->|"WebSocket\n1 s push"| DASHBOARD
+    TGTASK  -->|"Wi-Fi STA"| ROUTER
+    ROUTER  -->|"HTTPS"| TELEGRAM
+
+    %% ── STYLES ────────────────────────────────────────────────────────────────
+    classDef sensor  fill:#d1fae5,stroke:#059669,color:#064e3b
+    classDef nout    fill:#fce7f3,stroke:#db2777,color:#831843
+    classDef nproc   fill:#bfdbfe,stroke:#2563eb,color:#1e3a8a,font-weight:bold
+    classDef ldrin   fill:#fef9c3,stroke:#ca8a04,color:#713f12
+    classDef hout    fill:#fce7f3,stroke:#db2777,color:#831843
+    classDef hproc   fill:#fed7aa,stroke:#ea580c,color:#7c2d12,font-weight:bold
+    classDef webui   fill:#dbeafe,stroke:#3b82f6,color:#1e40af
+    classDef ext     fill:#f0fdf4,stroke:#16a34a,color:#14532d
+
+    class DHT22,FLAME,SOSBTN,MQ2,MQ7,MQ135 sensor
+    class STROBE,FAN,NBUZZ,SOSLED nout
+    class NPROC nproc
+    class LDRA,LDRB,LDRC ldrin
+    class LS1,LS2,HBUZZ hout
+    class HPROC hproc
+    class WS,TGTASK webui
+    class ROUTER,TELEGRAM,DASHBOARD ext
+
+    style NODE fill:#eff6ff,stroke:#3b82f6,color:#1e3a8a
+    style HUB  fill:#fffbeb,stroke:#f59e0b,color:#78350f
+    style NS   fill:#ecfdf5,stroke:#10b981
+    style NOUT fill:#fdf2f8,stroke:#ec4899
+    style HIN  fill:#fefce8,stroke:#eab308
+    style HOUT fill:#fdf2f8,stroke:#ec4899

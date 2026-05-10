@@ -1,0 +1,342 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="app.diagrams.net" version="21.0.0">
+  <diagram name="ARIA System Block Diagram" id="aria-v6">
+    <mxGraphModel dx="1400" dy="900" grid="1" gridSize="10" guides="1"
+                  tooltips="1" connect="1" arrows="1" fold="1"
+                  page="1" pageScale="1" pageWidth="1654" pageHeight="1169"
+                  math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <!-- ═══════════════════════════════════════════════════════════════════
+             NODE  BACKGROUND
+        ════════════════════════════════════════════════════════════════════ -->
+        <mxCell id="node-bg" value="ARIA NODE — ESP32 DevKit C v4"
+          style="swimlane;startSize=36;fillColor=#eff6ff;strokeColor=#3b82f6;
+                 fontStyle=1;fontSize=13;fontColor=#1e3a8a;swimlaneLine=1;rounded=1;"
+          vertex="1" parent="1">
+          <mxGeometry x="20" y="20" width="390" height="760" as="geometry" />
+        </mxCell>
+
+        <!-- ── Sensors group ── -->
+        <mxCell id="sens-bg" value="Sensors"
+          style="swimlane;startSize=28;fillColor=#ecfdf5;strokeColor=#10b981;
+                 fontStyle=1;fontSize=11;fontColor=#064e3b;rounded=1;"
+          vertex="1" parent="node-bg">
+          <mxGeometry x="10" y="46" width="175" height="490" as="geometry" />
+        </mxCell>
+
+        <mxCell id="dht22" value="DHT22  ·  GPIO 14&#xa;Temperature / Humidity"
+          style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d1fae5;strokeColor=#059669;
+                 fontSize=10;fontColor=#064e3b;"
+          vertex="1" parent="sens-bg">
+          <mxGeometry x="10" y="36" width="155" height="50" as="geometry" />
+        </mxCell>
+
+        <mxCell id="flame" value="Flame Sensor  ·  GPIO 25&#xa;digital  LOW = fire detected"
+          style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fef9c3;strokeColor=#ca8a04;
+                 fontSize=10;fontColor=#713f12;"
+          vertex="1" parent="sens-bg">
+          <mxGeometry x="10" y="96" width="155" height="50" as="geometry" />
+        </mxCell>
+
+        <mxCell id="sosbtn" value="SOS Button  ·  GPIO 26&#xa;INPUT_PULLUP  LOW = pressed"
+          style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fce7f3;strokeColor=#db2777;
+                 fontSize=10;fontColor=#831843;"
+          vertex="1" parent="sens-bg">
+          <mxGeometry x="10" y="156" width="155" height="50" as="geometry" />
+        </mxCell>
+
+        <mxCell id="mq2" value="MQ-2  ·  GPIO 34&#xa;Smoke / Gas  (ADC)"
+          style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d1fae5;strokeColor=#059669;
+                 fontSize=10;fontColor=#064e3b;"
+          vertex="1" parent="sens-bg">
+          <mxGeometry x="10" y="216" width="155" height="50" as="geometry" />
+        </mxCell>
+
+        <mxCell id="mq7" value="MQ-7  ·  GPIO 33&#xa;CO Gas  (ADC)"
+          style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d1fae5;strokeColor=#059669;
+                 fontSize=10;fontColor=#064e3b;"
+          vertex="1" parent="sens-bg">
+          <mxGeometry x="10" y="276" width="155" height="50" as="geometry" />
+        </mxCell>
+
+        <mxCell id="mq135" value="MQ-135  ·  GPIO 35&#xa;Air Quality  (ADC)"
+          style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d1fae5;strokeColor=#059669;
+                 fontSize=10;fontColor=#064e3b;"
+          vertex="1" parent="sens-bg">
+          <mxGeometry x="10" y="336" width="155" height="50" as="geometry" />
+        </mxCell>
+
+        <!-- ── Node Outputs group ── -->
+        <mxCell id="nout-bg" value="Outputs"
+          style="swimlane;startSize=28;fillColor=#fdf2f8;strokeColor=#ec4899;
+                 fontStyle=1;fontSize=11;fontColor=#831843;rounded=1;"
+          vertex="1" parent="node-bg">
+          <mxGeometry x="200" y="46" width="178" height="490" as="geometry" />
+        </mxCell>
+
+        <mxCell id="strobe" value="Strobe LED  ·  GPIO 27&#xa;125 ms flash  on fire"
+          style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fce7f3;strokeColor=#db2777;
+                 fontSize=10;fontColor=#831843;"
+          vertex="1" parent="nout-bg">
+          <mxGeometry x="10" y="36" width="158" height="50" as="geometry" />
+        </mxCell>
+
+        <mxCell id="fanrelay" value="Fan Relay  ·  GPIO 19&#xa;active LOW  (NC contact)"
+          style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d1fae5;strokeColor=#059669;
+                 fontSize=10;fontColor=#064e3b;"
+          vertex="1" parent="nout-bg">
+          <mxGeometry x="10" y="96" width="158" height="50" as="geometry" />
+        </mxCell>
+
+        <mxCell id="nbuzz" value="Buzzer  ·  GPIO 13&#xa;tone patterns"
+          style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fce7f3;strokeColor=#db2777;
+                 fontSize=10;fontColor=#831843;"
+          vertex="1" parent="nout-bg">
+          <mxGeometry x="10" y="156" width="158" height="50" as="geometry" />
+        </mxCell>
+
+        <mxCell id="sosled" value="SOS LED  ·  GPIO 23&#xa;Morse  · · · — — — · · ·"
+          style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fce7f3;strokeColor=#db2777;
+                 fontSize=10;fontColor=#831843;"
+          vertex="1" parent="nout-bg">
+          <mxGeometry x="10" y="216" width="158" height="50" as="geometry" />
+        </mxCell>
+
+        <!-- ── Node Processing ── -->
+        <mxCell id="nproc" value="Fire Score Engine&#xa;0 – 10  composite score&#xa;EMA smoothing  |  Gas leak detection&#xa;Calibration (30 samples at boot)"
+          style="rounded=1;whiteSpace=wrap;html=1;fillColor=#bfdbfe;strokeColor=#2563eb;
+                 fontSize=11;fontStyle=1;fontColor=#1e3a8a;"
+          vertex="1" parent="node-bg">
+          <mxGeometry x="10" y="556" width="368" height="80" as="geometry" />
+        </mxCell>
+
+        <!-- ── Internal node edges ── -->
+        <mxCell id="e-sens-nproc" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#059669;exitX=0.5;exitY=1;entryX=0.15;entryY=0;" edge="1" source="sens-bg" target="nproc" parent="node-bg">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-nproc-nout" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#db2777;exitX=0.85;exitY=0;entryX=0.5;entryY=1;" edge="1" source="nproc" target="nout-bg" parent="node-bg">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+
+        <!-- ═══════════════════════════════════════════════════════════════════
+             HUB  BACKGROUND
+        ════════════════════════════════════════════════════════════════════ -->
+        <mxCell id="hub-bg" value="ARIA HUB — ESP32 DevKit C v4"
+          style="swimlane;startSize=36;fillColor=#fffbeb;strokeColor=#f59e0b;
+                 fontStyle=1;fontSize=13;fontColor=#78350f;swimlaneLine=1;rounded=1;"
+          vertex="1" parent="1">
+          <mxGeometry x="460" y="20" width="430" height="760" as="geometry" />
+        </mxCell>
+
+        <!-- ── LDR Inputs group ── -->
+        <mxCell id="ldr-bg" value="LDR Laser Inputs"
+          style="swimlane;startSize=28;fillColor=#fefce8;strokeColor=#eab308;
+                 fontStyle=1;fontSize=11;fontColor=#713f12;rounded=1;"
+          vertex="1" parent="hub-bg">
+          <mxGeometry x="10" y="46" width="195" height="246" as="geometry" />
+        </mxCell>
+
+        <mxCell id="ldra" value="LDR + Laser  ·  GPIO 34&#xa;Exit A  person count&#xa;congestion  /  obstruction"
+          style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fef9c3;strokeColor=#ca8a04;
+                 fontSize=10;fontColor=#713f12;"
+          vertex="1" parent="ldr-bg">
+          <mxGeometry x="10" y="36" width="175" height="58" as="geometry" />
+        </mxCell>
+
+        <mxCell id="ldrb" value="LDR + Laser  ·  GPIO 35&#xa;Exit B  person count&#xa;congestion  /  obstruction"
+          style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fef9c3;strokeColor=#ca8a04;
+                 fontSize=10;fontColor=#713f12;"
+          vertex="1" parent="ldr-bg">
+          <mxGeometry x="10" y="104" width="175" height="58" as="geometry" />
+        </mxCell>
+
+        <mxCell id="ldrc" value="LDR + Laser  ·  GPIO 32&#xa;Exit C  person count&#xa;congestion  /  obstruction"
+          style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fef9c3;strokeColor=#ca8a04;
+                 fontSize=10;fontColor=#713f12;"
+          vertex="1" parent="ldr-bg">
+          <mxGeometry x="10" y="172" width="175" height="58" as="geometry" />
+        </mxCell>
+
+        <!-- ── Hub Outputs group ── -->
+        <mxCell id="hout-bg" value="Outputs"
+          style="swimlane;startSize=28;fillColor=#fdf2f8;strokeColor=#ec4899;
+                 fontStyle=1;fontSize=11;fontColor=#831843;rounded=1;"
+          vertex="1" parent="hub-bg">
+          <mxGeometry x="220" y="46" width="198" height="246" as="geometry" />
+        </mxCell>
+
+        <mxCell id="ls1" value="LED Strip 1  ·  GPIO 5&#xa;WS2812B  30 px&#xa;Zone A(10)  B(10)  C(10)"
+          style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fce7f3;strokeColor=#db2777;
+                 fontSize=10;fontColor=#831843;"
+          vertex="1" parent="hout-bg">
+          <mxGeometry x="10" y="36" width="178" height="58" as="geometry" />
+        </mxCell>
+
+        <mxCell id="ls2" value="LED Strip 2  ·  GPIO 4&#xa;WS2812B  40 px&#xa;Zone A(22)  +  C(18)  no B"
+          style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fce7f3;strokeColor=#db2777;
+                 fontSize=10;fontColor=#831843;"
+          vertex="1" parent="hout-bg">
+          <mxGeometry x="10" y="104" width="178" height="58" as="geometry" />
+        </mxCell>
+
+        <mxCell id="hbuzz" value="Hub Buzzer  ·  GPIO 16&#xa;100 ms rapid / 500 ms / beep"
+          style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fce7f3;strokeColor=#db2777;
+                 fontSize=10;fontColor=#831843;"
+          vertex="1" parent="hout-bg">
+          <mxGeometry x="10" y="172" width="178" height="58" as="geometry" />
+        </mxCell>
+
+        <!-- ── Hub Processing ── -->
+        <mxCell id="hproc" value="Zone Score Engine&#xa;Zone A = max( Node 1, Node 5 )     Zone B = max( Node 2, Node 3 )     Zone C = max( Node 4, Node 6 )&#xa;Exit routing logic  |  LED animation  |  Alert tiers 1 – 3"
+          style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fed7aa;strokeColor=#ea580c;
+                 fontSize=11;fontStyle=1;fontColor=#7c2d12;"
+          vertex="1" parent="hub-bg">
+          <mxGeometry x="10" y="308" width="408" height="90" as="geometry" />
+        </mxCell>
+
+        <!-- ── WebServer ── -->
+        <mxCell id="webserver" value="AsyncWebServer  :80&#xa;AP: ARIA-HUB  192.168.4.1&#xa;WebSocket /ws  push 1 s&#xa;DNS captive portal  |  up to 8 clients"
+          style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dbeafe;strokeColor=#3b82f6;
+                 fontSize=10;fontColor=#1e40af;"
+          vertex="1" parent="hub-bg">
+          <mxGeometry x="10" y="416" width="200" height="86" as="geometry" />
+        </mxCell>
+
+        <!-- ── Telegram Task ── -->
+        <mxCell id="tgtask" value="Telegram Task&#xa;core 0  ·  HTTPS / TLS&#xa;alert tiers 1 / 2 / 3&#xa;60 s cooldown  |  auto-reconnect 30 s"
+          style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dbeafe;strokeColor=#3b82f6;
+                 fontSize=10;fontColor=#1e40af;"
+          vertex="1" parent="hub-bg">
+          <mxGeometry x="220" y="416" width="198" height="86" as="geometry" />
+        </mxCell>
+
+        <!-- ── Alert tier legend ── -->
+        <mxCell id="tiers" value="Score 0–2: SAFE  —  LEDs off, silent&#xa;Score 3–4: WARNING  —  ORANGE pulse, Telegram tier 1&#xa;Score 5–7: FIRE  —  GREEN/RED chase, 500ms buzzer, Telegram tier 2&#xa;Score 8–10: CRITICAL  —  RED chase, 100ms rapid, Telegram tier 3&#xa;Gas only: YELLOW chase, beep pattern"
+          style="text;html=1;strokeColor=#6b7280;fillColor=#f9fafb;align=left;
+                 verticalAlign=middle;spacingLeft=8;fontSize=10;rounded=1;"
+          vertex="1" parent="hub-bg">
+          <mxGeometry x="10" y="518" width="408" height="86" as="geometry" />
+        </mxCell>
+
+        <!-- ── Internal hub edges ── -->
+        <mxCell id="e-ldr-hproc" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#ca8a04;exitX=0.5;exitY=1;entryX=0.15;entryY=0;" edge="1" source="ldr-bg" target="hproc" parent="hub-bg">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-hproc-hout" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#db2777;exitX=0.85;exitY=0;entryX=0.5;entryY=1;" edge="1" source="hproc" target="hout-bg" parent="hub-bg">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-hproc-ws" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#3b82f6;" edge="1" source="hproc" target="webserver" parent="hub-bg">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-hproc-tg" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#3b82f6;" edge="1" source="hproc" target="tgtask" parent="hub-bg">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+
+        <!-- ═══════════════════════════════════════════════════════════════════
+             EXTERNAL  SYSTEMS
+        ════════════════════════════════════════════════════════════════════ -->
+        <mxCell id="router" value="Router / Hotspot&#xa;Wi-Fi  ch 11&#xa;(Telegram path only)"
+          style="shape=mxgraph.network.wireless_router;html=1;fillColor=#d1fae5;
+                 strokeColor=#059669;fontSize=11;fontColor=#064e3b;
+                 verticalLabelPosition=bottom;verticalAlign=top;align=center;"
+          vertex="1" parent="1">
+          <mxGeometry x="960" y="80" width="120" height="100" as="geometry" />
+        </mxCell>
+
+        <mxCell id="telegram-cloud" value="Telegram Cloud&#xa;Bot API  ·  HTTPS"
+          style="shape=mxgraph.cisco.servers.standard_server;html=1;
+                 fillColor=#d1fae5;strokeColor=#059669;fontSize=11;fontColor=#064e3b;
+                 verticalLabelPosition=bottom;verticalAlign=top;align=center;"
+          vertex="1" parent="1">
+          <mxGeometry x="960" y="280" width="120" height="100" as="geometry" />
+        </mxCell>
+
+        <mxCell id="dashboard" value="Dashboard&#xa;Phone / Laptop&#xa;up to 8 devices"
+          style="shape=mxgraph.cisco.computers_and_peripherals.pc;html=1;
+                 fillColor=#fef9c3;strokeColor=#ca8a04;fontSize=11;fontColor=#713f12;
+                 verticalLabelPosition=bottom;verticalAlign=top;align=center;"
+          vertex="1" parent="1">
+          <mxGeometry x="960" y="480" width="120" height="100" as="geometry" />
+        </mxCell>
+
+
+        <!-- ═══════════════════════════════════════════════════════════════════
+             CROSS-BLOCK  CONNECTIONS
+        ════════════════════════════════════════════════════════════════════ -->
+
+        <!-- ESP-NOW: Node → Hub -->
+        <mxCell id="e-espnow-nh" value="ESP-NOW  NodePacket&#xa;every 500 ms"
+          style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#2563eb;
+                 fontColor=#1e40af;fontStyle=1;fontSize=10;
+                 endArrow=block;startArrow=none;"
+          edge="1" source="nproc" target="hproc" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="215" y="656" />
+              <mxPoint x="215" y="720" />
+              <mxPoint x="700" y="720" />
+              <mxPoint x="700" y="656" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- ESP-NOW: Hub → Node -->
+        <mxCell id="e-espnow-hn" value="ESP-NOW  HubCommandPacket&#xa;on demand"
+          style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#ea580c;
+                 fontColor=#7c2d12;fontStyle=1;fontSize=10;
+                 endArrow=block;startArrow=none;"
+          edge="1" source="hproc" target="nproc" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="700" y="660" />
+              <mxPoint x="700" y="740" />
+              <mxPoint x="215" y="740" />
+              <mxPoint x="215" y="660" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- WebSocket → Dashboard -->
+        <mxCell id="e-ws-dash" value="WebSocket&#xa;1 s push"
+          style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#3b82f6;
+                 fontColor=#1e40af;fontStyle=1;fontSize=10;"
+          edge="1" source="webserver" target="dashboard" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Telegram Task → Router -->
+        <mxCell id="e-tgtask-router" value="Wi-Fi STA"
+          style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#059669;
+                 fontColor=#064e3b;fontStyle=1;fontSize=10;"
+          edge="1" source="tgtask" target="router" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Router → Telegram Cloud -->
+        <mxCell id="e-router-tg" value="HTTPS"
+          style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#059669;
+                 fontColor=#064e3b;fontStyle=1;fontSize=10;"
+          edge="1" source="router" target="telegram-cloud" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+
+        <!-- ═══════════════════════════════════════════════════════════════════
+             TITLE  BLOCK
+        ════════════════════════════════════════════════════════════════════ -->
+        <mxCell id="title" value="ARIA  —  Automatic Risk Identification &amp; Alert  |  System Block Diagram  v6"
+          style="text;html=1;strokeColor=none;fillColor=none;
+                 align=center;verticalAlign=middle;fontSize=15;fontStyle=1;fontColor=#111827;"
+          vertex="1" parent="1">
+          <mxGeometry x="20" y="800" width="1100" height="36" as="geometry" />
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
