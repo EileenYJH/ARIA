@@ -745,10 +745,18 @@ void renderLedRouting(unsigned long now) {
   lastAnimTime = now;
   chaseStep++;
 
+  // Gas-only mode: both strips solid white — no chasing
+  if (anyGas() && !anyFire()) {
+    fill_solid(leds,  NUM_LEDS,  CRGB(255, 255, 255));
+    fill_solid(leds2, NUM_LEDS2, CRGB(255, 255, 255));
+    FastLED.show();
+    return;
+  }
+
   ZoneRender render[3];
   computeZoneRender(render);
 
-  fill_solid(leds,  NUM_LEDS,  CRGB::Black);  // explicit per-strip clear — avoids multi-strip FastLED.clear() quirks
+  fill_solid(leds,  NUM_LEDS,  CRGB::Black);
   fill_solid(leds2, NUM_LEDS2, CRGB::Black);
   for (uint8_t z = 0; z < 3; z++) drawZone(z, render[z]);
   for (uint8_t z = 0; z < 3; z++) drawZone2(z, render[z]);
