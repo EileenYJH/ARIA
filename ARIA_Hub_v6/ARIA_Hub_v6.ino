@@ -182,6 +182,8 @@ uint32_t chatTotal = 0;
 
 void setupEspNow();
 void sendNodeCommand(uint8_t targetNodeID, const String &command);
+extern const char HTML_PAGE[];  // defined later in PROGMEM; forward-declared so setup() lambdas can reference it
+
 const char *espNowErrName(int code);
 void setupDashboard();
 void updateExitCongestion(unsigned long now);
