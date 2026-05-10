@@ -1352,7 +1352,7 @@ void pushDashboard() {
 
 
 
-static const char HTML_PAGE[] PROGMEM = R"rawliteral(
+const char HTML_PAGE[] PROGMEM = R"rawliteral(
 <!doctype html>
 <html>
 <head>
