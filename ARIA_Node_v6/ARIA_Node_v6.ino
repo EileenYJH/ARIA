@@ -565,9 +565,12 @@ int calculateFireScore(const SensorData &d) {
   if (d.mq2Smooth > mq2Spike)         score += 2;
   else if (d.mq2Smooth > mq2SlightSmoke) score += 1;
 
-  // MQ-7: carbon monoxide (fast rise is the strongest indicator)
-  if (d.coPpm > CO_PPM_CONCERN && cRate > 5.0f) score += 2;
-  else if (d.coPpm > CO_PPM_CONCERN)             score += 1;
+  // MQ-7: CO — tiered by absolute level, +1 bonus for fast rise
+  if      (d.coPpm >= CO_PPM_CRITICAL)  score += 4;  // ≥ 150 ppm
+  else if (d.coPpm >= CO_PPM_FIRE)      score += 3;  // ≥ 70 ppm
+  else if (d.coPpm >= CO_PPM_DANGEROUS) score += 2;  // ≥ 50 ppm
+  else if (d.coPpm >= CO_PPM_CONCERN)   score += 1;  // ≥ 35 ppm
+  if (d.coPpm >= CO_PPM_CONCERN && cRate > 5.0f) score += 1;
 
   // DHT22: rapid humidity drop = fire drying the air
   if (hRate < -HUM_DROP_THRESHOLD) score += 1;
@@ -583,8 +586,8 @@ int calculateFireScore(const SensorData &d) {
     if (d.mq2Smooth > mq2Spike && d.coPpm < CO_PPM_CONCERN && d.mq135Smooth < mq135SlightPoor) score -= 2;
     // Smoke + rising humidity → cooking or steam
     if (d.mq2Smooth > mq2SlightSmoke && hRate > HUM_RISE_THRESHOLD) score -= 2;
-    // Slow CO rise with no smoke → benign background CO (ventilation issue)
-    if (d.coPpm > CO_PPM_CONCERN && cRate < 3.0f && d.mq2Smooth < mq2Spike) score -= 1;
+    // Slow CO at concern level only with no smoke → benign background CO (ventilation issue)
+    if (d.coPpm >= CO_PPM_CONCERN && d.coPpm < CO_PPM_DANGEROUS && cRate < 3.0f && d.mq2Smooth < mq2Spike) score -= 1;
     // MQ-135 elevated but MQ-2 clean → chemical vapour, not combustion
     if (d.mq135Smooth > mq135Poor && d.mq2Smooth < mq2SlightSmoke) score -= 1;
   }
