@@ -45,7 +45,7 @@
 #define TELEGRAM_CHAT_ID   "1487637387"
 
 #define PIN_LED_STRIP     5
-#define PIN_LED_STRIP2    4
+#define PIN_LED_STRIP2    17
 #define PIN_BUZZER        16
 #define PIN_LDR_A         34
 #define PIN_LDR_B         35
@@ -54,10 +54,11 @@
 #define NUM_LEDS          30
 #define ZONE_LEN          10
 
-// Second strip: Zone A (22 LEDs) + Zone C (18 LEDs), no Zone B
-#define NUM_LEDS2         40
-#define ZONE_A2_LEN       22
-#define ZONE_C2_LEN       18
+// Second strip: Zone A (17) + Zone B (9, static) + Zone C (13)
+#define NUM_LEDS2         39
+#define ZONE_A2_LEN       17
+#define ZONE_B2_LEN       9
+#define ZONE_C2_LEN       13
 
 #define SCORE_AMBER       3
 #define SCORE_FIRE        5
@@ -199,6 +200,7 @@ void drawChaseRange(uint8_t start, uint8_t end, Direction dir, CRGB color);
 void drawPulseZone(uint8_t zone, CRGB color);
 void drawZone2(uint8_t zone, ZoneRender zr);
 void drawChaseRangeBuf(CRGB* buf, uint8_t start, uint8_t end, Direction dir, CRGB color);
+void drawChaseRangeBuf2(CRGB* buf, uint8_t start, uint8_t end, Direction dir, CRGB color);
 void drawPulseZoneBuf(CRGB* buf, uint8_t start, uint8_t end, CRGB color);
 CRGB colorFor(ZoneColor c);
 bool exitCongestedForZone(uint8_t zone);
@@ -821,18 +823,43 @@ void drawPulseZoneBuf(CRGB* buf, uint8_t start, uint8_t end, CRGB color) {
   for (uint8_t i = start; i <= end; i++) buf[i] = pulse;
 }
 
-// Strip 2: Zone A (0–21), Zone C (22–39), no Zone B
+// Strip 2: Zone A (0–16) chase | Zone B (17–25) static colour | Zone C (26–38) chase
 void drawZone2(uint8_t zone, ZoneRender zr) {
-  if (zone == 1) return;  // no Zone B on strip 2
   if (zr.color == COLOR_OFF || zr.direction == DIR_OFF) return;
-  CRGB c = colorFor(zr.color);
-  uint8_t start = (zone == 0) ? 0 : ZONE_A2_LEN;
-  uint8_t end   = (zone == 0) ? (ZONE_A2_LEN - 1) : (ZONE_A2_LEN + ZONE_C2_LEN - 1);
-  if (zr.direction == DIR_PULSE) {
-    drawPulseZoneBuf(leds2, start, end, c);
-    return;
+
+  if (zone == 0) {
+    uint8_t s = 0, e = ZONE_A2_LEN - 1;
+    if (zr.direction == DIR_PULSE) drawPulseZoneBuf(leds2, s, e, colorFor(zr.color));
+    else                           drawChaseRangeBuf2(leds2, s, e, zr.direction, colorFor(zr.color));
+
+  } else if (zone == 1) {
+    // Zone B on strip 2: solid status colour only (red / yellow / green)
+    CRGB sc = (zr.color == COLOR_RED)  ? CRGB(220,   0,   0) :
+              (zr.color == COLOR_GREEN) ? CRGB(  0, 180,   0) :
+                                         CRGB(255, 200,   0); // orange/yellow → yellow
+    fill_solid(leds2 + ZONE_A2_LEN, ZONE_B2_LEN, sc);
+
+  } else if (zone == 2) {
+    uint8_t s = ZONE_A2_LEN + ZONE_B2_LEN;
+    uint8_t e = s + ZONE_C2_LEN - 1;
+    if (zr.direction == DIR_PULSE) drawPulseZoneBuf(leds2, s, e, colorFor(zr.color));
+    else                           drawChaseRangeBuf2(leds2, s, e, zr.direction, colorFor(zr.color));
   }
-  drawChaseRangeBuf(leds2, start, end, zr.direction, c);
+}
+
+// Strip 2 chase: base packet 3 LEDs, grows to 5 near the exit
+void drawChaseRangeBuf2(CRGB* buf, uint8_t start, uint8_t end, Direction dir, CRGB color) {
+  int len = (int)end - (int)start + 1;
+  if (len <= 0) return;
+  int progress = chaseStep % len;
+  int lead = (dir == DIR_LEFT) ? ((int)end - progress) : ((int)start + progress);
+  int exitPos    = (dir == DIR_LEFT) ? (int)start : (int)end;
+  int distToExit = abs(lead - exitPos);
+  int pktSize    = (distToExit <= 2) ? 5 : (distToExit <= 5) ? 4 : 3;
+  for (int p = 0; p < pktSize; p++) {
+    int pos = (dir == DIR_LEFT) ? (lead + p) : (lead - p);
+    if (pos >= (int)start && pos <= (int)end) buf[pos] = color;
+  }
 }
 
 CRGB colorFor(ZoneColor c) {
