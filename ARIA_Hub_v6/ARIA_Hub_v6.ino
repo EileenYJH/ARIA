@@ -836,9 +836,10 @@ void drawZone2(uint8_t zone, ZoneRender zr) {
   } else if (zone == 1) {
     // Zone B on strip 2: slow-pulsing status colour so it reads as a separate indicator,
     // not a stray LED bleeding into Zone A or C.  red / yellow / green only.
-    CRGB sc = (zr.color == COLOR_RED)  ? CRGB(220,   0,   0) :
-              (zr.color == COLOR_GREEN) ? CRGB(  0, 180,   0) :
-                                         CRGB(255, 140,   0);  // warning/gas → orange
+    CRGB sc = (zr.color == COLOR_RED)    ? CRGB(220, 0,   0) :
+              (zr.color == COLOR_GREEN)  ? CRGB(0,   180, 0) :
+              (zr.color == COLOR_YELLOW) ? CRGB(255, 255, 255) :  // gas leak → white
+                                           CRGB(255, 140, 0);     // warning/amber → orange
     uint8_t bri = beatsin8(18, 60, 255);   // gentle 18 BPM breathe
     sc.nscale8_video(bri);
     fill_solid(leds2 + ZONE_A2_LEN, ZONE_B2_LEN, sc);
