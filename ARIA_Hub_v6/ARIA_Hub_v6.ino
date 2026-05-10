@@ -3,7 +3,8 @@
   Hardware: ESP32 DevKit C v4
 
   Pins:
-    GPIO 5  -> WS2812B DIN, 30 pixels
+    GPIO 5  -> WS2812B DIN strip 1, 30 pixels (Zone A=10, B=10, C=10)
+    GPIO 4  -> WS2812B DIN strip 2, 40 pixels (Zone A=22, C=18, no Zone B)
     GPIO 16 -> hub buzzer
     GPIO 34 -> LDR + laser beam for Exit A (10 kΩ pull-down)
     GPIO 35 -> LDR + laser beam for Exit B (10 kΩ pull-down)
@@ -43,6 +44,7 @@
 #define TELEGRAM_CHAT_ID   "1487637387"
 
 #define PIN_LED_STRIP     5
+#define PIN_LED_STRIP2    4
 #define PIN_BUZZER        16
 #define PIN_LDR_A         34
 #define PIN_LDR_B         35
@@ -50,6 +52,11 @@
 
 #define NUM_LEDS          30
 #define ZONE_LEN          10
+
+// Second strip: Zone A (22 LEDs) + Zone C (18 LEDs), no Zone B
+#define NUM_LEDS2         40
+#define ZONE_A2_LEN       22
+#define ZONE_C2_LEN       18
 
 #define SCORE_AMBER       3
 #define SCORE_FIRE        5
@@ -148,6 +155,7 @@ ExitState exits[3] = {
 };
 
 CRGB leds[NUM_LEDS];
+CRGB leds2[NUM_LEDS2];
 DNSServer dnsServer;
 AsyncWebServer server(80);
 AsyncWebSocket ws("/ws");
@@ -188,6 +196,9 @@ void computeZoneRender(ZoneRender render[3]);
 void drawZone(uint8_t zone, ZoneRender zr);
 void drawChaseRange(uint8_t start, uint8_t end, Direction dir, CRGB color);
 void drawPulseZone(uint8_t zone, CRGB color);
+void drawZone2(uint8_t zone, ZoneRender zr);
+void drawChaseRangeBuf(CRGB* buf, uint8_t start, uint8_t end, Direction dir, CRGB color);
+void drawPulseZoneBuf(CRGB* buf, uint8_t start, uint8_t end, CRGB color);
 CRGB colorFor(ZoneColor c);
 bool exitCongestedForZone(uint8_t zone);
 void handleSerialCommands();
@@ -224,15 +235,14 @@ void onDataRecv(const uint8_t *mac, const uint8_t *incomingData, int len) {
   NodePacket packet;
   memcpy(&packet, incomingData, sizeof(packet));
 
-  // Option B: if hub has a pending node assignment and packet has no ID,
-  // remap it to the pending ID
-  if (packet.nodeID == 0 && pendingNodeMap >= 1 && pendingNodeMap <= 6) {
-    packet.nodeID = pendingNodeMap;
-    addLog(String("[MAP] Unassigned node remapped to Node ") + String(pendingNodeMap));
-    pendingNodeMap = 0;  // consumed — prevent later unassigned nodes from colliding
-  } else if (packet.nodeID == 0) {
-    packet.nodeID = 1;
-    addLog("[MAP] Unassigned node defaulted to Node 1");
+  // If hub has a pending assignment, all unassigned packets go to that node until
+  // the user sets a new one. If nothing is pending, fall back to Node 1.
+  if (packet.nodeID == 0) {
+    uint8_t target = (pendingNodeMap >= 1 && pendingNodeMap <= 6) ? pendingNodeMap : 1;
+    if (nodes[target].lastSeen == 0) {
+      addLog(String("[MAP] Unassigned node → Node ") + String(target));
+    }
+    packet.nodeID = target;
   }
 
   if (packet.nodeID < 1 || packet.nodeID > 6) return;
@@ -276,6 +286,7 @@ void setup() {
   digitalWrite(PIN_BUZZER, LOW);
 
   FastLED.addLeds<WS2812B, PIN_LED_STRIP, GRB>(leds, NUM_LEDS);
+  FastLED.addLeds<WS2812B, PIN_LED_STRIP2, GRB>(leds2, NUM_LEDS2);
   FastLED.setBrightness(200);
   FastLED.clear(true);
 
@@ -740,6 +751,7 @@ void renderLedRouting(unsigned long now) {
 
   FastLED.clear();
   for (uint8_t z = 0; z < 3; z++) drawZone(z, render[z]);
+  for (uint8_t z = 0; z < 3; z++) drawZone2(z, render[z]);
   FastLED.show();
 }
 
@@ -786,6 +798,44 @@ void drawPulseZone(uint8_t zone, CRGB color) {
   CRGB pulse = color;
   pulse.nscale8_video(brightness);
   for (uint8_t i = start; i <= end; i++) leds[i] = pulse;
+}
+
+// Buffer-generic variants used by strip 2
+void drawChaseRangeBuf(CRGB* buf, uint8_t start, uint8_t end, Direction dir, CRGB color) {
+  int len = (int)end - (int)start + 1;
+  if (len <= 0) return;
+  int progress = chaseStep % len;
+  int lead = (dir == DIR_LEFT)
+    ? ((int)end - progress)
+    : ((int)start + progress);
+  int exitPos    = (dir == DIR_LEFT) ? (int)start : (int)end;
+  int distToExit = abs(lead - exitPos);
+  int pktSize = (distToExit <= 2) ? 3 : (distToExit <= 4) ? 2 : 1;
+  for (int p = 0; p < pktSize; p++) {
+    int pos = (dir == DIR_LEFT) ? (lead + p) : (lead - p);
+    if (pos >= (int)start && pos <= (int)end) buf[pos] = color;
+  }
+}
+
+void drawPulseZoneBuf(CRGB* buf, uint8_t start, uint8_t end, CRGB color) {
+  uint8_t brightness = beatsin8(30, 45, 255);
+  CRGB pulse = color;
+  pulse.nscale8_video(brightness);
+  for (uint8_t i = start; i <= end; i++) buf[i] = pulse;
+}
+
+// Strip 2: Zone A (0–21), Zone C (22–39), no Zone B
+void drawZone2(uint8_t zone, ZoneRender zr) {
+  if (zone == 1) return;  // no Zone B on strip 2
+  if (zr.color == COLOR_OFF || zr.direction == DIR_OFF) return;
+  CRGB c = colorFor(zr.color);
+  uint8_t start = (zone == 0) ? 0 : ZONE_A2_LEN;
+  uint8_t end   = (zone == 0) ? (ZONE_A2_LEN - 1) : (ZONE_A2_LEN + ZONE_C2_LEN - 1);
+  if (zr.direction == DIR_PULSE) {
+    drawPulseZoneBuf(leds2, start, end, c);
+    return;
+  }
+  drawChaseRangeBuf(leds2, start, end, zr.direction, c);
 }
 
 CRGB colorFor(ZoneColor c) {
@@ -879,11 +929,14 @@ void runCommand(String cmd, bool fromWeb) {
     } else {
       int newId = rest.toInt();
       if (newId >= 1 && newId <= 6) {
+        // Reset the node currently holding the old ID so it goes back to ID=0,
+        // then it will be picked up by the new pendingNodeMap on its next packet.
+        if (pendingNodeMap >= 1 && pendingNodeMap <= 6 && pendingNodeMap != (uint8_t)newId) {
+          sendNodeCommand(pendingNodeMap, "SETNODE 0");
+        }
         pendingNodeMap = (uint8_t)newId;
-        // Tell any currently-unassigned (ID=0) node to adopt this ID immediately
-        // so data arrives on the next packet rather than waiting for a hub-side remap
         sendNodeCommand(0, String("SETNODE ") + String(newId));
-        addLog(String("[MAP] Node ") + String(newId) + " assigned — broadcasting SETNODE to unassigned nodes");
+        addLog(String("[MAP] Mapping → Node ") + String(newId));
       } else if (newId == 0) {
         pendingNodeMap = 0;
         addLog("[MAP] Node remapping cleared");
@@ -1005,7 +1058,7 @@ void runCommand(String cmd, bool fromWeb) {
 
 void clearAllState() {
   for (uint8_t i = 0; i < 7; i++) {
-    nodes[i] = NodeState{0, 0, 0, 0, false, false, false, 0.0f, 0.0f, 0, false};
+    nodes[i] = NodeState{0, 0, 0, 0, 0, false, false, false, 0.0f, 0.0f, 0, false};
   }
   for (uint8_t i = 0; i < 3; i++) {
     exits[i].beamCut     = false;
@@ -1629,7 +1682,7 @@ function applyNodeMap(){
   let v = document.getElementById('nodeMapSel').value;
   send('SETNODE ' + v);
   let r = document.getElementById('mapResult');
-  r.textContent = v === '0' ? 'Mapping cleared' : 'Hub will map next packet to Node ' + v;
+  r.textContent = v === '0' ? 'Mapping cleared — unassigned nodes default to Node 1' : 'All unassigned packets → Node ' + v + ' (until next change)';
   setTimeout(()=>{ r.textContent=''; }, 4000);
 }
 
