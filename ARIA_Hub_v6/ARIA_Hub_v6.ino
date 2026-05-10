@@ -1944,10 +1944,15 @@ function drawMap(){
   let exCcx  = W - exSideW/2;         // Exit C centre x
   let exBcy  = exBY + exBH/2;         // Exit B centre y
 
+  // Zone B node centres in corridor (N2 left of junction, N3 right)
+  let n2cx = midX - roomW/2;
+  let n3cx = midX + roomW/2;
+
   // Normal routes
-  let pA  = [[zA_cx,corrMidY],[exAcx,corrMidY]];                               // ZoneA → left → ExitA
-  let pB  = [[midX,corrMidY],[midX,exBcy]];                                    // ZoneB → down → ExitB
-  let pC  = [[zC_cx,corrMidY],[exCcx,corrMidY]];                               // ZoneC → right → ExitC
+  let pA    = [[zA_cx,corrMidY],[exAcx,corrMidY]];                             // ZoneA → left → ExitA
+  let pB_N2 = [[n2cx,corrMidY],[midX,corrMidY],[midX,exBcy]];                  // ZoneB N2 → junction → ExitB
+  let pB_N3 = [[n3cx,corrMidY],[midX,corrMidY],[midX,exBcy]];                  // ZoneB N3 → junction → ExitB
+  let pC    = [[zC_cx,corrMidY],[exCcx,corrMidY]];                             // ZoneC → right → ExitC
   // Redirect routes
   let pAB = [[zA_cx,corrMidY],[midX,corrMidY],[midX,exBcy]];                   // ZoneA → right → down → ExitB
   let pAC = [[zA_cx,corrMidY],[exCcx,corrMidY]];                               // ZoneA → right → ExitC
@@ -1966,11 +1971,11 @@ function drawMap(){
   else if(allF) drawParticles(pA,  '#ef4444');
   else if(!fB)  drawParticles(pAB, '#ef4444');
   else          drawParticles(pAC, '#ef4444');
-  // Zone B
-  if(!fB)       drawParticles(pB,  gcB);
-  else if(allF) drawParticles(pB,  '#ef4444');
-  else if(!fA)  drawParticles(pBA, '#ef4444');
-  else          drawParticles(pBC, '#ef4444');
+  // Zone B — N2 and N3 each run from their corridor position to the junction then down
+  if(!fB)      { drawParticles(pB_N2, gcB);        drawParticles(pB_N3, gcB);        }
+  else if(allF){ drawParticles(pB_N2, '#ef4444');   drawParticles(pB_N3, '#ef4444'); }
+  else if(!fA)   drawParticles(pBA,   '#ef4444');
+  else           drawParticles(pBC,   '#ef4444');
   // Zone C
   if(!fC)       drawParticles(pC,  gcC);
   else if(allF) drawParticles(pC,  '#ef4444');
