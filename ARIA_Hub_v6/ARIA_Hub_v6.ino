@@ -748,7 +748,8 @@ void renderLedRouting(unsigned long now) {
   ZoneRender render[3];
   computeZoneRender(render);
 
-  FastLED.clear();
+  fill_solid(leds,  NUM_LEDS,  CRGB::Black);  // explicit per-strip clear — avoids multi-strip FastLED.clear() quirks
+  fill_solid(leds2, NUM_LEDS2, CRGB::Black);
   for (uint8_t z = 0; z < 3; z++) drawZone(z, render[z]);
   for (uint8_t z = 0; z < 3; z++) drawZone2(z, render[z]);
   FastLED.show();
@@ -833,10 +834,13 @@ void drawZone2(uint8_t zone, ZoneRender zr) {
     else                           drawChaseRangeBuf2(leds2, s, e, zr.direction, colorFor(zr.color));
 
   } else if (zone == 1) {
-    // Zone B on strip 2: solid status colour only (red / yellow / green)
+    // Zone B on strip 2: slow-pulsing status colour so it reads as a separate indicator,
+    // not a stray LED bleeding into Zone A or C.  red / yellow / green only.
     CRGB sc = (zr.color == COLOR_RED)  ? CRGB(220,   0,   0) :
               (zr.color == COLOR_GREEN) ? CRGB(  0, 180,   0) :
-                                         CRGB(255, 200,   0); // orange/yellow → yellow
+                                         CRGB(255, 200,   0);
+    uint8_t bri = beatsin8(18, 60, 255);   // gentle 18 BPM breathe
+    sc.nscale8_video(bri);
     fill_solid(leds2 + ZONE_A2_LEN, ZONE_B2_LEN, sc);
 
   } else if (zone == 2) {
