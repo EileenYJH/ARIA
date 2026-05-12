@@ -4,10 +4,10 @@
 
   Pins:
     GPIO 5  -> WS2812B DIN strip 1, 30 pixels (Zone A=10, B=10, C=10)
-    GPIO 4  -> WS2812B DIN strip 2, 40 pixels (Zone A=22, C=18, no Zone B)
+    GPIO 17 -> WS2812B DIN strip 2, 40 pixels (Zone A=17, B=8 static, C=15)
     GPIO 16 -> hub buzzer
     GPIO 34 -> LDR + laser beam for Exit A (10 kΩ pull-down)
-    GPIO 35 -> LDR + laser beam for Exit B (10 kΩ pull-down)
+    GPIO 35 -> LDR + laser beam for Exit B (10 kb  Ω pull-down)
     GPIO 32 -> LDR + laser beam for Exit C (10 kΩ pull-down)
 
   Primary purpose: exit routing + congestion detection
@@ -25,6 +25,8 @@
 #include <HTTPClient.h>
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
+#define FASTLED_ALLOW_INTERRUPTS 0
+#define FASTLED_INTERRUPT_RETRY_COUNT 1
 #include <FastLED.h>
 #include "html_page.h"
 
@@ -32,17 +34,18 @@
 #include <esp_arduino_version.h>
 #endif
 
-#define WIFI_CHANNEL      11
+#define WIFI_CHANNEL      6
 #define AP_SSID           "ARIA-HUB"
 #define AP_PASSWORD       "aria1234"
 #define DNS_PORT          53
-// Router MUST be set to channel 11 for both Telegram and ESP-NOW to work together.
-// Firmware re-locks channel 11 after STA connect and every 30 s in loop().
-// Fill in your credentials below on your local copy — do not commit them to a public repo.
+// Router MUST be set to channel 6 for both Telegram and ESP-NOW to work together.
+// Firmware re-locks channel 6 after STA connect and every 30 s in loop().
+// Fill in your credential
+s below on your local copy — do not commit them to a public repo.
 #define STA_SSID          "Eileen"
 #define STA_PASSWORD      "eileenyeoh"
 #define TELEGRAM_BOT_TOKEN "8594989645:AAGVPETGPWmitPrbUhuToOWrzLNpp5Byswo"
-#define TELEGRAM_CHAT_ID   "1487637387"
+#define TELEGRAM_CHAT_ID   "-1003494494160"
 
 #define PIN_LED_STRIP     5
 #define PIN_LED_STRIP2    17
@@ -54,11 +57,11 @@
 #define NUM_LEDS          30
 #define ZONE_LEN          10
 
-// Second strip: Zone A (17) + Zone B (9, static) + Zone C (13)
-#define NUM_LEDS2         39
+// Second strip: Zone A (17) + Zone B (8, static) + Zone C (15)
+#define NUM_LEDS2         40
 #define ZONE_A2_LEN       17
-#define ZONE_B2_LEN       9
-#define ZONE_C2_LEN       13
+#define ZONE_B2_LEN       8
+#define ZONE_C2_LEN       15
 
 #define SCORE_AMBER       3
 #define SCORE_FIRE        5
@@ -72,15 +75,19 @@
 
 
 // LDR laser-break congestion parameters
-#define LDR_BEAM_THRESHOLD  2000   // ADC < this = beam broken (laser not reaching LDR)
+#define LDR_BEAM_THRESHOLD  2000   // default; use LDRTHRESH <n> at runtime to tune per-install
 #define LDR_OBSTRUCT_MS     8000   // beam blocked > 8s = obstruction emergency
 #define LDR_WINDOW_MS       30000  // 30-second person-count window
 #define LDR_CONGESTION_COUNT 23    // > 23 persons in 30s = congested (~46 /min)
 #define GAS_BEEP_ON_MS    200
 #define GAS_BEEP_OFF_MS   300
-#define SOS_BEEP_ON_MS    150
-#define SOS_BEEP_OFF_MS   150
+#define SOS_DOT_MS        150
+#define SOS_DASH_MS       450
+#define SOS_SYMBOL_GAP_MS 150
+#define SOS_GROUP_GAP_MS  450
+#define SOS_REPEAT_GAP_MS 1500
 
+#pragma pack(1)
 typedef struct {
   uint8_t nodeID;
   int     mq2Smooth;
@@ -93,13 +100,14 @@ typedef struct {
   bool    sosActive;
   float   tempC;
   float   humidity;
-} NodePacket;
+} NodePacket;          // 26 bytes, no padding
 
 typedef struct {
   uint8_t magic;
   uint8_t targetNodeID;
   char command[32];
-} HubCommandPacket;
+} HubCommandPacket;    // 34 bytes, no padding
+#pragma pack()
 
 struct NodeState {
   int fireScore;
@@ -114,6 +122,7 @@ struct NodeState {
   float humidity;
   unsigned long lastSeen;
   bool forced;
+  bool waitingForFirstPacket;
 };
 
 struct ExitState {
@@ -164,20 +173,43 @@ AsyncWebSocket ws("/ws");
 
 uint8_t chaseStep = 0;
 uint8_t pendingNodeMap = 0;
-unsigned long lastAnimTime = 0;
+int     ldrRaw[3]      = {0, 0, 0};   // last ADC reading per exit (A=0, B=1, C=2)
+int     ldrThreshold   = LDR_BEAM_THRESHOLD;  // runtime-tunable via LDRTHRESH command
 unsigned long lastWsPush = 0;
 unsigned long lastStatusPrint = 0;
 unsigned long lastChRelock = 0;
 static const unsigned long CH_RELOCK_MS = 30000;
 volatile bool needsImmediatePush = false;
+uint32_t espnowPktRx[7] = {0};   // packets received per node slot (index = nodeID 1-6)
 unsigned long buzzerStepStart = 0;
 bool buzzerOn = false;
+
+uint8_t sosMorseStep = 0;
+unsigned long sosMorseStepStart = 0;
+static const uint16_t SOS_DURATIONS[] = {
+  SOS_DOT_MS,  SOS_SYMBOL_GAP_MS,
+  SOS_DOT_MS,  SOS_SYMBOL_GAP_MS,
+  SOS_DOT_MS,  SOS_GROUP_GAP_MS,
+  SOS_DASH_MS, SOS_SYMBOL_GAP_MS,
+  SOS_DASH_MS, SOS_SYMBOL_GAP_MS,
+  SOS_DASH_MS, SOS_GROUP_GAP_MS,
+  SOS_DOT_MS,  SOS_SYMBOL_GAP_MS,
+  SOS_DOT_MS,  SOS_SYMBOL_GAP_MS,
+  SOS_DOT_MS,  SOS_REPEAT_GAP_MS
+};
+static const bool SOS_OUTPUT_ON[] = {
+  true, false, true, false, true, false,
+  true, false, true, false, true, false,
+  true, false, true, false, true, false
+};
+static const uint8_t SOS_STEPS = sizeof(SOS_DURATIONS) / sizeof(SOS_DURATIONS[0]);
+
 int lastAlertTierSent = 0;
 unsigned long lastAlertNotifyTime = 0;
 
-String logLines[12];
+String logLines[8];
 uint8_t logIndex = 0;
-static const uint8_t CHAT_BUF = 30;
+static const uint8_t CHAT_BUF = 12;
 String chatLines[CHAT_BUF];
 uint8_t chatWriteIdx = 0;
 uint32_t chatTotal = 0;
@@ -192,7 +224,7 @@ void updateLdrExit(uint8_t idx, unsigned long now);
 void updateHubBuzzer(unsigned long now);
 void updateAlertNotifications(unsigned long now);
 void sendTelegramAlert(const String &text);
-void renderLedRouting(unsigned long now);
+void renderLedRouting();
 void computeZoneScores(int &scoreA, int &scoreB, int &scoreC);
 void computeZoneRender(ZoneRender render[3]);
 void drawZone(uint8_t zone, ZoneRender zr);
@@ -223,6 +255,16 @@ const char *zoneOfNode(uint8_t id);
 String sosLocations();
 String gasLocations();
 int max3(int a, int b, int c);
+
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
+void onDataSent(const wifi_tx_info_t *info, esp_now_send_status_t status) {
+#else
+void onDataSent(const uint8_t *mac, esp_now_send_status_t status) {
+#endif
+  if (status != ESP_NOW_SEND_SUCCESS) {
+    Serial.println("[ESP-NOW] TX failed — node out of range or wrong channel");
+  }
+}
 
 #if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
 void onDataRecv(const esp_now_recv_info_t *info, const uint8_t *incomingData, int len) {
@@ -258,6 +300,7 @@ void onDataRecv(const uint8_t *mac, const uint8_t *incomingData, int len) {
   n.tempC       = packet.tempC;
   n.humidity    = packet.humidity;
   n.lastSeen    = millis();
+  n.waitingForFirstPacket = false;
 
   // Only overwrite fire/gas/sos state when not manually forced from hub
   if (!n.forced) {
@@ -265,6 +308,14 @@ void onDataRecv(const uint8_t *mac, const uint8_t *incomingData, int len) {
     n.flameConfirmed = packet.flameConfirmed;
     n.gasLeakMode    = packet.gasLeakMode;
     n.sosActive      = packet.sosActive;
+  }
+
+  // Heartbeat counter — prints to Serial every 20 packets per node so you can
+  // confirm ESP-NOW traffic is flowing without flooding the log.
+  espnowPktRx[packet.nodeID]++;
+  if (espnowPktRx[packet.nodeID] % 20 == 1) {
+    Serial.printf("[ESP-NOW] Node %u alive — %u pkts rx, score %d\n",
+                  packet.nodeID, espnowPktRx[packet.nodeID], n.fireScore);
   }
 
   static unsigned long lastPacketLog[7] = {0};
@@ -287,13 +338,19 @@ void setup() {
 
   digitalWrite(PIN_BUZZER, LOW);
 
-  FastLED.addLeds<WS2812B, PIN_LED_STRIP, GRB>(leds, NUM_LEDS);
-  FastLED.addLeds<WS2812B, PIN_LED_STRIP2, GRB>(leds2, NUM_LEDS2);
+  FastLED.addLeds<WS2812B, PIN_LED_STRIP, GRB>(leds, NUM_LEDS)
+         .setCorrection(TypicalLEDStrip);
+  FastLED.addLeds<WS2812B, PIN_LED_STRIP2, GRB>(leds2, NUM_LEDS2)
+         .setCorrection(TypicalLEDStrip);
   FastLED.setBrightness(200);
+  FastLED.setMaxRefreshRate(120);
   FastLED.clear(true);
 
   clearAllState();
   setupEspNow();
+  // Disable WiFi power-save: keeps radio always-on and eliminates the burst of
+  // periodic wake-up interrupts that corrupt WS2812B timing in AP+STA mode.
+  esp_wifi_set_ps(WIFI_PS_NONE);
   setupDashboard();
 
   if (String(STA_SSID).length() > 0) {
@@ -332,7 +389,7 @@ void loop() {
   updateExitCongestion(now);
   updateHubBuzzer(now);
   updateAlertNotifications(now);
-  renderLedRouting(now);
+  renderLedRouting();
 
   if (needsImmediatePush) {
     needsImmediatePush = false;
@@ -351,9 +408,14 @@ void loop() {
   if (now - lastChRelock >= CH_RELOCK_MS) {
     lastChRelock = now;
     esp_wifi_set_channel(WIFI_CHANNEL, WIFI_SECOND_CHAN_NONE);
-    if (String(STA_SSID).length() > 0 && WiFi.status() != WL_CONNECTED) {
-      WiFi.begin(STA_SSID, STA_PASSWORD);
-      addLog("[NET] STA reconnecting...");
+    if (String(STA_SSID).length() > 0) {
+      wl_status_t wlSt = WiFi.status();
+      // Only retry when definitively failed/dropped — not while already connecting
+      if (wlSt == WL_DISCONNECTED || wlSt == WL_CONNECT_FAILED ||
+          wlSt == WL_CONNECTION_LOST || wlSt == WL_NO_SSID_AVAIL) {
+        WiFi.begin(STA_SSID, STA_PASSWORD);
+        addLog("[NET] STA reconnecting...");
+      }
     }
   }
 }
@@ -379,7 +441,8 @@ void setupEspNow() {
   }
 
   esp_now_register_recv_cb(onDataRecv);
-  Serial.print("[ESP-NOW] Ready. Hub STA MAC: ");
+  esp_now_register_send_cb(onDataSent);
+  Serial.print("[ESP-NOW] Ready. Hub MAC: ");
   Serial.println(WiFi.macAddress());
 }
 
@@ -478,8 +541,9 @@ void updateLdrExit(uint8_t idx, unsigned long now) {
   ExitState &e = exits[idx];
   if (e.windowStart == 0) e.windowStart = now;
 
-  // Below threshold = laser blocked (person or object interrupting beam)
-  bool cut = (analogRead(e.pin) < LDR_BEAM_THRESHOLD);
+  int  adcVal = analogRead(e.pin);
+  ldrRaw[idx] = adcVal;
+  bool cut = (adcVal < ldrThreshold);
   bool wasCut = e.lastBeamCut;
   e.lastBeamCut = cut;
   e.beamCut = cut;
@@ -554,7 +618,19 @@ void updateHubBuzzer(unsigned long now) {
   if (overall >= SCORE_CRITICAL) { buzzerTick(now, 100, 100); return; }
   if (overall >= SCORE_FIRE)     { buzzerTick(now, 500, 500); return; }
   if (anyGas())                  { buzzerTick(now, GAS_BEEP_ON_MS, GAS_BEEP_OFF_MS); return; }
-  if (anySos())                  { buzzerTick(now, SOS_BEEP_ON_MS, SOS_BEEP_OFF_MS); return; }
+
+  if (anySos()) {
+    if (now - sosMorseStepStart >= SOS_DURATIONS[sosMorseStep]) {
+      digitalWrite(PIN_BUZZER, LOW);
+      sosMorseStepStart = now;
+      sosMorseStep = (sosMorseStep + 1) % SOS_STEPS;
+    }
+    digitalWrite(PIN_BUZZER, SOS_OUTPUT_ON[sosMorseStep] ? HIGH : LOW);
+    return;
+  }
+
+  sosMorseStep = 0;
+  sosMorseStepStart = now;
   buzzerOn = false;
   digitalWrite(PIN_BUZZER, LOW);
 }
@@ -578,19 +654,27 @@ void updateAlertNotifications(unsigned long now) {
     return;
   }
 
-  // Build message with real newlines
+  auto ns = [](uint8_t id) -> String {
+    return nodeOnline(id) ? String(nodes[id].fireScore) : String("-");
+  };
+
   String msg = "ARIA FIRE ALERT\n";
   if (tier == 3) msg += "CRITICAL (Tier 3) — Warden contact BOMBA 999\n";
   else if (tier == 2) msg += "EMERGENCY (Tier 2) — Evacuate now\n";
   else msg += "PRE-WARNING (Tier 1) — Investigate\n";
-  msg += "\nZone A: " + String(scoreA) + "/10\n";
-  msg += "Zone B: " + String(scoreB) + "/10\n";
-  msg += "Zone C: " + String(scoreC) + "/10\n";
+
+  msg += "\nZone A: " + String(scoreA) + "/10 [" + statusForScore(scoreA) + "]  N1:" + ns(1) + " N5:" + ns(5) + "\n";
+  msg += "Zone B: " + String(scoreB) + "/10 [" + statusForScore(scoreB) + "]  N2:" + ns(2) + " N3:" + ns(3) + "\n";
+  msg += "Zone C: " + String(scoreC) + "/10 [" + statusForScore(scoreC) + "]  N4:" + ns(4) + " N6:" + ns(6) + "\n";
+
   msg += "\nExit A: " + String(exits[0].congested ? "CONGESTED" : "clear") + "\n";
   msg += "Exit B: " + String(exits[1].congested ? "CONGESTED" : "clear") + "\n";
   msg += "Exit C: " + String(exits[2].congested ? "CONGESTED" : "clear");
   if (anySos())  msg += "\n\nSOS: " + sosLocations();
   if (anyGas())  msg += "\nGas: " + gasLocations();
+
+  msg += "\n\nStay calm. Follow green exit signs. Do not use lifts. Assist those who need help.";
+  msg += "\nCall BOMBA: 999";
 
   sendTelegramAlert(msg);
   lastAlertTierSent = tier;
@@ -601,7 +685,7 @@ void updateAlertNotifications(unsigned long now) {
 static volatile bool telegramBusy = false;
 
 struct TelegramJob {
-  char body[640];
+  char body[900];
 };
 
 static void telegramTask(void *param) {
@@ -740,27 +824,36 @@ void computeZoneRender(ZoneRender render[3]) {
   }
 }
 
-void renderLedRouting(unsigned long now) {
-  if (now - lastAnimTime < ANIM_INTERVAL_MS) return;
-  lastAnimTime = now;
-  chaseStep++;
+void renderLedRouting() {
+  EVERY_N_MILLISECONDS(ANIM_INTERVAL_MS) {
+    chaseStep++;
 
-  // Gas-only mode: both strips solid white — no chasing
-  if (anyGas() && !anyFire()) {
-    fill_solid(leds,  NUM_LEDS,  CRGB(255, 255, 255));
-    fill_solid(leds2, NUM_LEDS2, CRGB(255, 255, 255));
-    FastLED.show();
-    return;
+    if (anyGas() && !anyFire()) {
+      fill_solid(leds,  NUM_LEDS,  CRGB(255, 255, 255));
+      fill_solid(leds2, NUM_LEDS2, CRGB(255, 255, 255));
+    } else {
+      ZoneRender render[3];
+      computeZoneRender(render);
+      fill_solid(leds,  NUM_LEDS,  CRGB::Black);
+      fill_solid(leds2, NUM_LEDS2, CRGB::Black);
+      for (uint8_t z = 0; z < 3; z++) drawZone(z, render[z]);
+      for (uint8_t z = 0; z < 3; z++) drawZone2(z, render[z]);
+    }
+
+    // Only push to the strips if the pixel data actually changed.
+    // Skipping FastLED.show() when nothing moved eliminates the 800 kHz
+    // bit-bang window that blocks ISRs, reducing interference with
+    // AsyncWebSocket and ESP-NOW during idle / gas-hold / all-off states.
+    static CRGB prevLeds[NUM_LEDS];
+    static CRGB prevLeds2[NUM_LEDS2];
+    bool changed = memcmp(leds,  prevLeds,  NUM_LEDS  * sizeof(CRGB)) != 0
+                || memcmp(leds2, prevLeds2, NUM_LEDS2 * sizeof(CRGB)) != 0;
+    if (changed) {
+      memcpy(prevLeds,  leds,  NUM_LEDS  * sizeof(CRGB));
+      memcpy(prevLeds2, leds2, NUM_LEDS2 * sizeof(CRGB));
+      FastLED.show();
+    }
   }
-
-  ZoneRender render[3];
-  computeZoneRender(render);
-
-  fill_solid(leds,  NUM_LEDS,  CRGB::Black);
-  fill_solid(leds2, NUM_LEDS2, CRGB::Black);
-  for (uint8_t z = 0; z < 3; z++) drawZone(z, render[z]);
-  for (uint8_t z = 0; z < 3; z++) drawZone2(z, render[z]);
-  FastLED.show();
 }
 
 void drawZone(uint8_t zone, ZoneRender zr) {
@@ -832,7 +925,7 @@ void drawPulseZoneBuf(CRGB* buf, uint8_t start, uint8_t end, CRGB color) {
   for (uint8_t i = start; i <= end; i++) buf[i] = pulse;
 }
 
-// Strip 2: Zone A (0–16) chase | Zone B (17–25) static colour | Zone C (26–38) chase
+// Strip 2: Zone A (0–16) chase | Zone B (17–24) static colour | Zone C (25–39) chase
 void drawZone2(uint8_t zone, ZoneRender zr) {
   if (zr.color == COLOR_OFF || zr.direction == DIR_OFF) return;
 
@@ -969,10 +1062,15 @@ void runCommand(String cmd, bool fromWeb) {
         // Reset the node currently holding the old ID so it goes back to ID=0,
         // then it will be picked up by the new pendingNodeMap on its next packet.
         if (pendingNodeMap >= 1 && pendingNodeMap <= 6 && pendingNodeMap != (uint8_t)newId) {
-          sendNodeCommand(pendingNodeMap, "SETNODE 0");
+          for (uint8_t r = 0; r < 3; r++) sendNodeCommand(pendingNodeMap, "SETNODE 0");
         }
         pendingNodeMap = (uint8_t)newId;
-        sendNodeCommand(0, String("SETNODE ") + String(newId));
+        // Clear stale values from the target slot immediately — prevents "last seen jump"
+        // on the dashboard and forces nodeOnline() to return false right away.
+        nodes[newId] = NodeState{0, 0, 0, 0, 0, false, false, false, 0.0f, 0.0f, 0, false, true};
+        needsImmediatePush = true;
+        // Send 3× so a single dropped ESP-NOW packet doesn't block the mapping
+        for (uint8_t r = 0; r < 3; r++) sendNodeCommand(0, String("SETNODE ") + String(newId));
         addLog(String("[MAP] Mapping → Node ") + String(newId));
       } else if (newId == 0) {
         pendingNodeMap = 0;
@@ -1065,6 +1163,16 @@ void runCommand(String cmd, bool fromWeb) {
       needsImmediatePush = true;
       addLog(String("[CMD] Exit ") + e + " obstruction cleared");
     }
+  } else if (cmd.startsWith("LDRTHRESH ")) {
+    int val = cmd.substring(10).toInt();
+    if (val > 0 && val <= 4095) {
+      ldrThreshold = val;
+      addLog(String("[LDR] Threshold → ") + String(val) +
+             "  (A:" + String(ldrRaw[0]) + " B:" + String(ldrRaw[1]) + " C:" + String(ldrRaw[2]) + ")");
+    } else {
+      addLog("[LDR] Use LDRTHRESH <1-4095>. Current raw — A:" + String(ldrRaw[0]) +
+             " B:" + String(ldrRaw[1]) + " C:" + String(ldrRaw[2]));
+    }
   } else if (cmd == "CLEAR") {
     clearAllState();
     addLog("[CMD] All state cleared");
@@ -1084,6 +1192,7 @@ void runCommand(String cmd, bool fromWeb) {
     Serial.println("  CONGEST A/B/C      force exit congestion");
     Serial.println("  CLEAR CONGEST A/B/C");
     Serial.println("  CLEAR OBSTRUCTION A/B/C");
+    Serial.println("  LDRTHRESH <0-4095> set beam-break ADC threshold (default 2000)");
     Serial.println("  CLEAR              reset all state");
     Serial.println("  STATUS             print node and exit state");
     Serial.println("  HELP               show commands");
@@ -1105,7 +1214,7 @@ void runCommand(String cmd, bool fromWeb) {
 
 void clearAllState() {
   for (uint8_t i = 0; i < 7; i++) {
-    nodes[i] = NodeState{0, 0, 0, 0, 0, false, false, false, 0.0f, 0.0f, 0, false};
+    nodes[i] = NodeState{0, 0, 0, 0, 0, false, false, false, 0.0f, 0.0f, 0, false, false};
   }
   for (uint8_t i = 0; i < 3; i++) {
     exits[i].beamCut     = false;
@@ -1137,12 +1246,16 @@ void printStatus() {
       nodeActive(i) ? "YES" : "no",
       nodes[i].forced ? "YES" : "no");
   }
+  Serial.printf("LDR raw — A:%d  B:%d  C:%d  threshold:%d\n",
+    ldrRaw[0], ldrRaw[1], ldrRaw[2], ldrThreshold);
   for (uint8_t i = 0; i < 3; i++) {
-    Serial.printf("Exit %c: %-9s%s%s  persons/30s=%u  total=%u\n",
+    Serial.printf("Exit %c: %-9s%s%s  beam=%s  ldr=%d  persons/30s=%u  total=%u\n",
       'A' + i,
       exits[i].congested ? "CONGESTED" : "clear",
       exits[i].forced      ? " forced"      : "",
       exits[i].obstruction ? " OBSTRUCTION" : "",
+      exits[i].beamCut  ? "CUT"    : "OK",
+      ldrRaw[i],
       exits[i].personCount,
       exits[i].totalPersons);
   }
@@ -1243,7 +1356,7 @@ const char *zoneName(uint8_t zone) {
 
 void addLog(const String &line) {
   logLines[logIndex] = line;
-  logIndex = (logIndex + 1) % 12;
+  logIndex = (logIndex + 1) % 8;
   Serial.println(line);
   if (line.startsWith("[CHAT]")) {
     chatLines[chatWriteIdx] = line;
@@ -1256,131 +1369,86 @@ String dashboardJson() {
   int scoreA, scoreB, scoreC;
   computeZoneScores(scoreA, scoreB, scoreC);
 
-  String json = "{";
-  json += "\"zones\":[";
-  json += "{\"name\":\"A\",\"score\":";
-  json += String(scoreA);
-  json += ",\"status\":\"";
-  json += statusForScore(scoreA);
-  json += "\"},";
-  json += "{\"name\":\"B\",\"score\":";
-  json += String(scoreB);
-  json += ",\"status\":\"";
-  json += statusForScore(scoreB);
-  json += "\"},";
-  json += "{\"name\":\"C\",\"score\":";
-  json += String(scoreC);
-  json += ",\"status\":\"";
-  json += statusForScore(scoreC);
-  json += "\"}";
-  json += "],";
+  String json;
+  json.reserve(1400);  // pre-alloc to avoid repeated heap reallocation
 
-  json += "\"nodes\":[";
+  // Short keys save flash (string literals) + reduce payload size each push
+  json = "{\"zn\":[";
+  json += "{\"name\":\"A\",\"score\":"; json += scoreA; json += ",\"status\":\""; json += statusForScore(scoreA); json += "\"},";
+  json += "{\"name\":\"B\",\"score\":"; json += scoreB; json += ",\"status\":\""; json += statusForScore(scoreB); json += "\"},";
+  json += "{\"name\":\"C\",\"score\":"; json += scoreC; json += ",\"status\":\""; json += statusForScore(scoreC); json += "\"}],";
+
+  json += "\"nd\":[";
   for (uint8_t i = 1; i <= 6; i++) {
-    if (i > 1) json += ",";
-    json += "{";
-    json += "\"id\":";
-    json += String(i);
-    json += ",\"score\":";
-    json += String(nodes[i].fireScore);
-    json += ",\"co\":";
-    json += String(nodes[i].coPpm);
-    json += ",\"mq2\":";
-    json += String(nodes[i].mq2Smooth);
-    json += ",\"mq7\":";
-    json += String(nodes[i].mq7Raw);
-    json += ",\"mq135\":";
-    json += String(nodes[i].mq135Smooth);
-    json += ",\"temp\":";
-    json += String(nodes[i].tempC, 1);
-    json += ",\"hum\":";
-    json += String(nodes[i].humidity, 1);
-    json += ",\"flame\":";
-    json += nodes[i].flameConfirmed ? "true" : "false";
-    json += ",\"gas\":";
-    json += nodes[i].gasLeakMode ? "true" : "false";
-    json += ",\"sos\":";
-    json += nodes[i].sosActive ? "true" : "false";
-    json += ",\"online\":";
-    json += nodeOnline(i) ? "true" : "false";
-    json += ",\"active\":";
-    json += nodeActive(i) ? "true" : "false";
-    json += ",\"forced\":";
-    json += nodes[i].forced ? "true" : "false";
+    if (i > 1) json += ',';
+    json += "{\"id\":"; json += i;
+    json += ",\"score\":"; json += nodes[i].fireScore;
+    json += ",\"co\":";   json += nodes[i].coPpm;
+    json += ",\"mq2\":";  json += nodes[i].mq2Smooth;
+    json += ",\"mq7\":";  json += nodes[i].mq7Raw;
+    json += ",\"mq135\":"; json += nodes[i].mq135Smooth;
+    json += ",\"temp\":"; json += String(nodes[i].tempC, 1);
+    json += ",\"hum\":";  json += String(nodes[i].humidity, 1);
+    json += ",\"fl\":";   json += nodes[i].flameConfirmed ? "true" : "false";
+    json += ",\"gas\":";  json += nodes[i].gasLeakMode    ? "true" : "false";
+    json += ",\"sos\":";  json += nodes[i].sosActive       ? "true" : "false";
+    json += ",\"on\":";   json += nodeOnline(i)             ? "true" : "false";
+    json += ",\"av\":";   json += nodeActive(i)             ? "true" : "false";
+    json += ",\"fc\":";   json += nodes[i].forced           ? "true" : "false";
     json += ",\"age\":";
-    if (nodes[i].lastSeen > 0) json += String((millis() - nodes[i].lastSeen) / 1000);
+    if (nodes[i].lastSeen > 0) json += (millis() - nodes[i].lastSeen) / 1000;
     else json += "-1";
-    json += "}";
+    json += ",\"pk\":"; json += espnowPktRx[i];
+    json += ",\"wt\":"; json += nodes[i].waitingForFirstPacket ? "true" : "false";
+    json += '}';
   }
   json += "],";
 
-  json += "\"exits\":[";
+  json += "\"ex\":[";
   for (uint8_t i = 0; i < 3; i++) {
-    if (i > 0) json += ",";
-    json += "{\"name\":\"";
-    json += (char)('A' + i);
-    json += "\",\"beamCut\":";
-    json += exits[i].beamCut ? "true" : "false";
-    json += ",\"congested\":";
-    json += exits[i].congested ? "true" : "false";
-    json += ",\"obstruction\":";
-    json += exits[i].obstruction ? "true" : "false";
-    json += ",\"personCount\":";
-    json += String(exits[i].personCount);
-    json += ",\"forced\":";
-    json += exits[i].forced ? "true" : "false";
-    json += "}";
+    if (i > 0) json += ',';
+    json += "{\"name\":\""; json += (char)('A' + i);
+    json += "\",\"bc\":";   json += exits[i].beamCut     ? "true" : "false";
+    json += ",\"cg\":";     json += exits[i].congested   ? "true" : "false";
+    json += ",\"ob\":";     json += exits[i].obstruction ? "true" : "false";
+    json += ",\"pc\":";     json += exits[i].personCount;
+    json += ",\"fc\":";     json += exits[i].forced      ? "true" : "false";
+    json += ",\"ldr\":";    json += ldrRaw[i];
+    json += '}';
   }
   json += "],";
 
-  json += "\"alerts\":{";
-  json += "\"fire\":";
-  json += anyFire() ? "true" : "false";
-  json += ",\"gas\":";
-  json += anyGas() ? "true" : "false";
-  json += ",\"sos\":";
-  json += anySos() ? "true" : "false";
+  json += "\"al\":{\"fire\":"; json += anyFire() ? "true" : "false";
+  json += ",\"gas\":";          json += anyGas()  ? "true" : "false";
+  json += ",\"sos\":";          json += anySos()  ? "true" : "false";
   json += "},";
-  json += "\"sosLocations\":\"";
-  String sos = sosLocations();
-  sos.replace("\\", "\\\\");
-  sos.replace("\"", "\\\"");
-  json += sos;
-  json += "\",";
-  json += "\"gasLocations\":\"";
-  String gas = gasLocations();
-  gas.replace("\\", "\\\\");
-  gas.replace("\"", "\\\"");
-  json += gas;
-  json += "\",";
 
-  json += "\"pendingMap\":";
-  json += String(pendingNodeMap);
-  json += ",";
+  String sos = sosLocations(); sos.replace("\"", "\\\"");
+  json += "\"sosL\":\""; json += sos; json += "\",";
+  String gas = gasLocations(); gas.replace("\"", "\\\"");
+  json += "\"gasL\":\""; json += gas; json += "\",";
 
-  json += "\"log\":[";
-  for (uint8_t i = 0; i < 12; i++) {
-    uint8_t idx = (logIndex + i) % 12;
-    if (i > 0) json += ",";
+  json += "\"pm\":"; json += pendingNodeMap; json += ',';
+
+  json += "\"lg\":[";
+  for (uint8_t i = 0; i < 8; i++) {
+    uint8_t idx = (logIndex + i) % 8;
+    if (i > 0) json += ',';
     String line = logLines[idx];
-    line.replace("\\", "\\\\");
     line.replace("\"", "\\\"");
-    json += "\"" + line + "\"";
+    json += '"'; json += line; json += '"';
   }
   json += "],";
 
-  uint8_t stored = chatTotal < CHAT_BUF ? (uint8_t)chatTotal : CHAT_BUF;
+  uint8_t stored   = chatTotal < CHAT_BUF ? (uint8_t)chatTotal : CHAT_BUF;
   uint8_t startIdx = chatTotal < CHAT_BUF ? 0 : chatWriteIdx;
-  json += "\"chatTotal\":";
-  json += String(chatTotal);
-  json += ",\"chat\":[";
+  json += "\"ct\":"; json += chatTotal; json += ",\"ch\":[";
   for (uint8_t i = 0; i < stored; i++) {
     uint8_t idx = (startIdx + i) % CHAT_BUF;
-    if (i > 0) json += ",";
+    if (i > 0) json += ',';
     String line = chatLines[idx];
-    line.replace("\\", "\\\\");
     line.replace("\"", "\\\"");
-    json += "\"" + line + "\"";
+    json += '"'; json += line; json += '"';
   }
   json += "]}";
   return json;

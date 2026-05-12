@@ -34,7 +34,7 @@
 #define PIN_MQ2      34
 #define PIN_MQ135    35
 
-#define WIFI_CHANNEL 11
+#define WIFI_CHANNEL 6
 
 #define CALIB_SAMPLES       30
 #define CALIB_INTERVAL_MS   100
@@ -88,6 +88,7 @@
 #define GAS_CONFIRM_READS   3
 #define GAS_CLEAR_READS     3
 
+#pragma pack(1)
 typedef struct {
   uint8_t nodeID;
   int     mq2Smooth;
@@ -100,13 +101,14 @@ typedef struct {
   bool    sosActive;
   float   tempC;
   float   humidity;
-} NodePacket;
+} NodePacket;          // 26 bytes, no padding
 
 typedef struct {
   uint8_t magic;
   uint8_t targetNodeID;
   char command[32];
-} HubCommandPacket;
+} HubCommandPacket;    // 34 bytes, no padding
+#pragma pack()
 
 struct SensorData {
   int mq2Raw;
@@ -212,6 +214,13 @@ unsigned long gasBuzzerStepStart = 0;
 void beginCalibration();
 void updateCalibration(unsigned long now);
 void setupEspNow();
+void onDataSent(
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
+  const wifi_tx_info_t *info,
+#else
+  const uint8_t *mac,
+#endif
+  esp_now_send_status_t status);
 void onEspNowRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len);
 void applyRemoteCommand(const String &cmd);
 void handleSerialCommands();
@@ -262,11 +271,7 @@ void setup() {
     coHistory[i] = 0;
   }
 
-  Serial.println();
-  Serial.println("ARIA Node v6 ready");
-  Serial.println("Transmitting as unassigned (ID=0) - hub will map to Node 1 by default.");
-  Serial.println("To assign a specific ID, type: SETNODE 1  (or 2-6)");
-  Serial.println();
+  Serial.println("[NODE] Ready. Unassigned — type SETNODE 1-6 to assign.");
 
   setupEspNow();
   beginCalibration();
@@ -329,9 +334,22 @@ void setupEspNow() {
   }
 
   esp_now_register_recv_cb(onEspNowRecv);
+  esp_now_register_send_cb(onDataSent);
   espNowReady = true;
   Serial.print("[ESP-NOW] Ready. Node MAC: ");
   Serial.println(WiFi.macAddress());
+}
+
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
+void onDataSent(const wifi_tx_info_t *info, esp_now_send_status_t status) {
+#else
+void onDataSent(const uint8_t *mac, esp_now_send_status_t status) {
+#endif
+  if (status != ESP_NOW_SEND_SUCCESS) {
+    uint8_t ch = 0; wifi_second_chan_t sec;
+    esp_wifi_get_channel(&ch, &sec);
+    Serial.printf("[ESP-NOW] TX failed — ch:%u expected ch%u\n", ch, WIFI_CHANNEL);
+  }
 }
 
 void onEspNowRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
@@ -409,10 +427,7 @@ void beginCalibration() {
   calibSamples = 0;
   lastCalibSampleTime = 0;
 
-  Serial.println("========================================");
-  Serial.println("CALIBRATION - reading environment baseline");
-  Serial.println("Please ensure no smoke or gas is present");
-  Serial.println("----------------------------------------");
+  Serial.println("[CALIB] Starting — keep air clean");
 }
 
 void updateCalibration(unsigned long now) {
@@ -449,22 +464,10 @@ void updateCalibration(unsigned long now) {
 
   calibrationActive = false;
 
-  Serial.println("----------------------------------------");
-  Serial.printf("MQ-2  baseline    : %d\n", mq2Baseline);
-  Serial.printf("MQ-2  slight smoke: %d\n", mq2SlightSmoke);
-  Serial.printf("MQ-2  spike       : %d\n", mq2Spike);
-  Serial.printf("MQ-2  gas leak    : %d\n", mq2GasLeak);
-  Serial.printf("MQ-7  baseline    : %d\n", mq7Baseline);
-  Serial.printf("MQ-135 baseline   : %d\n", mq135Baseline);
-  Serial.printf("MQ-135 slight poor: %d\n", mq135SlightPoor);
-  Serial.printf("MQ-135 poor       : %d\n", mq135Poor);
-  Serial.printf("MQ-135 hazard     : %d\n", mq135Hazard);
-  Serial.println("Calibration complete.");
-  Serial.println("========================================");
-
-  if (nodeID == 0) {
-    Serial.println("Awaiting node ID. Type: SETNODE 1  (or 2-6)");
-  }
+  Serial.printf("[CALIB] Done. MQ2:%d/%d/%d MQ7:%d MQ135:%d/%d/%d\n",
+    mq2Baseline, mq2Spike, mq2GasLeak, mq7Baseline,
+    mq135Baseline, mq135Poor, mq135Hazard);
+  if (nodeID == 0) Serial.println("[NODE] Unassigned. Type: SETNODE 1");
 }
 
 SensorData readSensors() {
