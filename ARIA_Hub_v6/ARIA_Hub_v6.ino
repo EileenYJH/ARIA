@@ -207,10 +207,10 @@ static const uint8_t SOS_STEPS = sizeof(SOS_DURATIONS) / sizeof(SOS_DURATIONS[0]
 int lastAlertTierSent = 0;
 unsigned long lastAlertNotifyTime = 0;
 
-String logLines[8];
+char logLines[8][72];
 uint8_t logIndex = 0;
 static const uint8_t CHAT_BUF = 12;
-String chatLines[CHAT_BUF];
+char chatLines[CHAT_BUF][96];
 uint8_t chatWriteIdx = 0;
 uint32_t chatTotal = 0;
 
@@ -241,7 +241,7 @@ void runCommand(String cmd, bool fromWeb);
 void printStatus();
 void clearAllState();
 void pushDashboard();
-String dashboardJson();
+const String& dashboardJson();
 void addLog(const String &line);
 const char *zoneName(uint8_t zone);
 const char *statusForScore(int score);
@@ -1355,24 +1355,24 @@ const char *zoneName(uint8_t zone) {
 }
 
 void addLog(const String &line) {
-  logLines[logIndex] = line;
+  line.toCharArray(logLines[logIndex], sizeof(logLines[0]));
   logIndex = (logIndex + 1) % 8;
   Serial.println(line);
   if (line.startsWith("[CHAT]")) {
-    chatLines[chatWriteIdx] = line;
+    line.toCharArray(chatLines[chatWriteIdx], sizeof(chatLines[0]));
     chatWriteIdx = (chatWriteIdx + 1) % CHAT_BUF;
     chatTotal++;
   }
 }
 
-String dashboardJson() {
+const String& dashboardJson() {
+  static String json;
+  json.reserve(1500);
+  json = "";
+
   int scoreA, scoreB, scoreC;
   computeZoneScores(scoreA, scoreB, scoreC);
 
-  String json;
-  json.reserve(1400);  // pre-alloc to avoid repeated heap reallocation
-
-  // Short keys save flash (string literals) + reduce payload size each push
   json = "{\"zn\":[";
   json += "{\"name\":\"A\",\"score\":"; json += scoreA; json += ",\"status\":\""; json += statusForScore(scoreA); json += "\"},";
   json += "{\"name\":\"B\",\"score\":"; json += scoreB; json += ",\"status\":\""; json += statusForScore(scoreB); json += "\"},";
@@ -1423,10 +1423,8 @@ String dashboardJson() {
   json += ",\"sos\":";          json += anySos()  ? "true" : "false";
   json += "},";
 
-  String sos = sosLocations(); sos.replace("\"", "\\\"");
-  json += "\"sosL\":\""; json += sos; json += "\",";
-  String gas = gasLocations(); gas.replace("\"", "\\\"");
-  json += "\"gasL\":\""; json += gas; json += "\",";
+  json += "\"sosL\":\""; json += sosLocations(); json += "\",";
+  json += "\"gasL\":\""; json += gasLocations(); json += "\",";
 
   json += "\"pm\":"; json += pendingNodeMap; json += ',';
 
@@ -1434,9 +1432,12 @@ String dashboardJson() {
   for (uint8_t i = 0; i < 8; i++) {
     uint8_t idx = (logIndex + i) % 8;
     if (i > 0) json += ',';
-    String line = logLines[idx];
-    line.replace("\"", "\\\"");
-    json += '"'; json += line; json += '"';
+    json += '"';
+    for (const char *p = logLines[idx]; *p; p++) {
+      if (*p == '"') json += '\\';
+      json += *p;
+    }
+    json += '"';
   }
   json += "],";
 
@@ -1446,9 +1447,12 @@ String dashboardJson() {
   for (uint8_t i = 0; i < stored; i++) {
     uint8_t idx = (startIdx + i) % CHAT_BUF;
     if (i > 0) json += ',';
-    String line = chatLines[idx];
-    line.replace("\"", "\\\"");
-    json += '"'; json += line; json += '"';
+    json += '"';
+    for (const char *p = chatLines[idx]; *p; p++) {
+      if (*p == '"') json += '\\';
+      json += *p;
+    }
+    json += '"';
   }
   json += "]}";
   return json;

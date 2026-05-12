@@ -335,6 +335,7 @@ void setupEspNow() {
 
   esp_now_register_recv_cb(onEspNowRecv);
   esp_now_register_send_cb(onDataSent);
+  esp_wifi_set_ps(WIFI_PS_NONE);
   espNowReady = true;
   Serial.print("[ESP-NOW] Ready. Node MAC: ");
   Serial.println(WiFi.macAddress());
