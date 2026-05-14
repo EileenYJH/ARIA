@@ -38,14 +38,13 @@
 #define AP_SSID           "ARIA-HUB"
 #define AP_PASSWORD       "aria1234"
 #define DNS_PORT          53
-// Router MUST be set to channel 6 for both Telegram and ESP-NOW to work together.
-// Firmware re-locks channel 6 after STA connect and every 30 s in loop().
-// Fill in your credential
+// Router MUST be set to the channel your wifi is working on for both Telegram and ESP-NOW to work together.
 
-#define STA_SSID          "Eileen"
-#define STA_PASSWORD      "eileenyeoh"
-#define TELEGRAM_BOT_TOKEN "8594989645:AAGVPETGPWmitPrbUhuToOWrzLNpp5Byswo"
-#define TELEGRAM_CHAT_ID   "-1003494494160"
+
+#define STA_SSID          "YourWiFiName"
+#define STA_PASSWORD      "YourWiFiPassword"
+#define TELEGRAM_BOT_TOKEN "your_bot_token_here"
+#define TELEGRAM_CHAT_ID   "your_chat_id_here"
 
 #define PIN_LED_STRIP     5
 #define PIN_LED_STRIP2    17
