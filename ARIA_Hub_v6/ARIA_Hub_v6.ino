@@ -41,7 +41,7 @@
 // Router MUST be set to channel 6 for both Telegram and ESP-NOW to work together.
 // Firmware re-locks channel 6 after STA connect and every 30 s in loop().
 // Fill in your credential
-s below on your local copy — do not commit them to a public repo.
+
 #define STA_SSID          "Eileen"
 #define STA_PASSWORD      "eileenyeoh"
 #define TELEGRAM_BOT_TOKEN "8594989645:AAGVPETGPWmitPrbUhuToOWrzLNpp5Byswo"
@@ -64,7 +64,7 @@ s below on your local copy — do not commit them to a public repo.
 #define ZONE_C2_LEN       15
 
 #define SCORE_AMBER       3
-#define SCORE_FIRE        5
+#define SCORE_FIRE        6
 #define SCORE_CRITICAL    8
 
 #define NODE_TIMEOUT_MS   5000
@@ -355,7 +355,7 @@ void setup() {
 
   if (String(STA_SSID).length() > 0) {
     WiFi.begin(STA_SSID, STA_PASSWORD);
-    addLog(String("[NET] Connecting STA to ") + STA_SSID + " (router must be on ch11)");
+    addLog(String("[NET] Connecting STA to ") + STA_SSID + " (router must be on ch6)");
     unsigned long staT = millis();
     while (WiFi.status() != WL_CONNECTED && millis() - staT < 10000) delay(100);
     if (WiFi.status() == WL_CONNECTED) {
@@ -828,7 +828,9 @@ void renderLedRouting() {
   EVERY_N_MILLISECONDS(ANIM_INTERVAL_MS) {
     chaseStep++;
 
-    if (anyGas() && !anyFire()) {
+    int scoreA, scoreB, scoreC;
+    computeZoneScores(scoreA, scoreB, scoreC);
+    if (anyGas() && max3(scoreA, scoreB, scoreC) < SCORE_AMBER) {
       fill_solid(leds,  NUM_LEDS,  CRGB(255, 255, 255));
       fill_solid(leds2, NUM_LEDS2, CRGB(255, 255, 255));
     } else {

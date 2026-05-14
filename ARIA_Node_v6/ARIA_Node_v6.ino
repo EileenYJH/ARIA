@@ -65,7 +65,7 @@
 #define TEMP_VENT_OFF       28.5f
 
 #define SCORE_AMBER         3
-#define SCORE_FIRE          5
+#define SCORE_FIRE          6
 #define SCORE_CRITICAL      8
 
 #define SENSOR_INTERVAL_MS  500
